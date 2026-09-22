@@ -1,39 +1,22 @@
 import os
 import json
-import re
 from pathlib import Path
 from datetime import datetime
 import ollama
 
-# Extracted from the original .env design
+from agent.tools import read_file, search_code
+
+# Updated system prompt to guide the tool-calling behavior
 CRITIC_SYSTEM_PROMPT = os.getenv("CRITIC_SYSTEM_PROMPT", (
     "You are a strict, highly skeptical principal engineer reviewing automated static analysis findings. "
-    "You will receive a file snippet and a reported bug. Your objective is to aggressively prune false positives. "
+    "You have access to tools to read files or search the codebase if you need more context to verify the bug. "
+    "Your objective is to aggressively prune false positives. "
     "CRITICAL RULES: "
     "1. Mark is_genuine_bug as false if the issue is a hallucination, relies on missing imports/context, or critiques spelling/typos. "
     "2. Mark is_genuine_bug as false if the finding is merely stylistic, pedantic, or a micro-optimization. "
-    "3. If the finding is mathematically/logically real but severity is inflated, lower adjusted_severity."
+    "3. If the finding is mathematically/logically real but severity is inflated, lower adjusted_severity. "
+    "4. When you have enough evidence, you MUST call the `submit_verdict` tool to finalize your review."
 ))
-
-VERIFICATION_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "is_genuine_bug": {"type": "boolean"},
-        "reasoning": {"type": "string"},
-        "adjusted_severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]}
-    },
-    "required": ["is_genuine_bug", "reasoning", "adjusted_severity"]
-}
-
-def _strip_code_fence(text: str) -> str:
-    """Removes a wrapping ``` fence (with optional language tag) from LLM-generated code."""
-    if not text:
-        return text
-    stripped = text.strip()
-    match = re.match(r"^```[a-zA-Z0-9_+-]*\n?(.*?)\n?```$", stripped, re.DOTALL)
-    if match:
-        return match.group(1)
-    return stripped.strip('`').strip()
 
 def dedupe(findings: list) -> list:
     """Groups findings by file, category, and approximate line number to remove duplicates."""
@@ -54,75 +37,145 @@ def dedupe(findings: list) -> list:
     out.sort(key=lambda f_: order.get(f_.get("severity"), 9))
     return out
 
+def submit_verdict(is_genuine_bug: bool, reasoning: str, adjusted_severity: str) -> str:
+    """
+    Submits your final verdict on whether the reported bug is real.
+    You must call this tool to complete the evaluation of the current finding.
+    
+    :param is_genuine_bug: True if it is a real bug, False if it is a false positive.
+    :param reasoning: A concise explanation of why it was kept or rejected.
+    :param adjusted_severity: Must be "critical", "high", "medium", or "low".
+    """
+    return "Verdict received."
+
 def verify_findings(client: ollama.Client, target_dir: Path, findings: list, model: str) -> list:
-    """Passes each finding back to the LLM with a +/- 100 line context window."""
+    """Passes each finding back to an agentic LLM equipped with code exploration tools."""
     verified = []
     
-    for idx, f_ in enumerate(findings):
-        file_path = f_.get("file")
-        if not file_path:
-            # No file to verify against; keep the finding as-is
-            verified.append(f_)
-            continue
+    # Change working directory so tools.py correctly resolves relative paths
+    original_dir = os.getcwd()
+    os.chdir(target_dir)
 
-        full_path = (target_dir / file_path).resolve()
-        if target_dir.resolve() not in full_path.parents and full_path != target_dir.resolve():
-            print(f"    ! Rejected finding with out-of-repo path: {file_path}")
-            continue
+    tools = [read_file, search_code, submit_verdict]
+    available_tools = {t.__name__: t for t in tools}
 
-        try:
-            with open(full_path, "r", encoding="utf-8", errors="replace") as file_obj:
-                content = file_obj.read()
-        except OSError:
-            # Keep finding if the file cannot be read
-            verified.append(f_)
-            continue
-
-        lines = content.splitlines()
-        target_line = f_.get("line")
-        
-        # Truncate to +/- 100 lines around the reported bug to save tokens
-        if isinstance(target_line, int) and 0 < target_line <= len(lines):
-            start = max(0, target_line - 100)
-            end = min(len(lines), target_line + 100)
-            context_lines = lines[start:end]
-            numbered_lines = [f"{start + i + 1:4d} | {line}" for i, line in enumerate(context_lines)]
-        else:
-            numbered_lines = [f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:200])]
-
-        chunk_text = "\n".join(numbered_lines)
-        finding_payload = json.dumps(f_, indent=2)
-        
-        user_prompt = (
-            f"File: {file_path}\n\n"
-            f"```{full_path.suffix.lstrip('.')}\n{chunk_text}\n```\n\n"
-            f"Reported Finding to verify:\n{finding_payload}"
-        )
-
-        print(f"  [Evaluator] Verifying {idx+1}/{len(findings)}: '{f_.get('title')}'")
-        try:
-            resp = client.chat(
-                model=model,
-                messages=[
-                    {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
-                    {"role": "user", "content": user_prompt},
-                ],
-                format=VERIFICATION_SCHEMA,
-                options={"temperature": 0.0}
-            )
-            
-            res = json.loads(resp.message.content)
-            
-            if res.get("is_genuine_bug"):
-                f_["severity"] = res.get("adjusted_severity", f_.get("severity", "medium"))
-                f_["reviewer_notes"] = res.get("reasoning", "")
+    try:
+        for idx, f_ in enumerate(findings):
+            file_path = f_.get("file")
+            if not file_path:
                 verified.append(f_)
+                continue
+
+            full_path = (target_dir / file_path).resolve()
+            if target_dir.resolve() not in full_path.parents and full_path != target_dir.resolve():
+                print(f"    ! Rejected finding with out-of-repo path: {file_path}")
+                continue
+
+            try:
+                with open(full_path, "r", encoding="utf-8", errors="replace") as file_obj:
+                    content = file_obj.read()
+            except OSError:
+                verified.append(f_)
+                continue
+
+            lines = content.splitlines()
+            target_line = f_.get("line")
+            
+            # Provide initial context so it doesn't always have to read the file first
+            if isinstance(target_line, int) and 0 < target_line <= len(lines):
+                start = max(0, target_line - 100)
+                end = min(len(lines), target_line + 100)
+                context_lines = lines[start:end]
+                numbered_lines = [f"{start + i + 1:4d} | {line}" for i, line in enumerate(context_lines)]
             else:
-                print(f"    - Rejected: {res.get('reasoning')}")
+                numbered_lines = [f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:200])]
+
+            chunk_text = "\n".join(numbered_lines)
+            finding_payload = json.dumps(f_, indent=2)
+            
+            user_prompt = (
+                f"File: {file_path}\n\n"
+                f"```{full_path.suffix.lstrip('.')}\n{chunk_text}\n```\n\n"
+                f"Reported Finding to verify:\n{finding_payload}"
+            )
+
+            print(f"  [Evaluator] Verifying {idx+1}/{len(findings)}: '{f_.get('title')}'")
+            
+            messages = [
+                {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
+                {"role": "user", "content": user_prompt},
+            ]
+
+            # Bounded agent loop for a single finding
+            verdict_reached = False
+            for turn in range(10):
+                try:
+                    resp = client.chat(
+                        model=model,
+                        messages=messages,
+                        tools=tools,
+                        options={"temperature": 0.0}
+                    )
+                except Exception as e:
+                    print(f"    ! Critic call failed, keeping finding: {e}")
+                    verified.append(f_)
+                    break
+
+                msg = resp.message
                 
-        except Exception as e:
-            print(f"    ! Critic call failed, keeping finding: {e}")
-            verified.append(f_)
+                # If the agent responds without calling a tool, nudge it
+                if not getattr(msg, 'tool_calls', None):
+                    messages.append(msg)
+                    messages.append({
+                        "role": "user", 
+                        "content": "Please explore the codebase using your tools or finalize your review by calling the `submit_verdict` tool."
+                    })
+                    continue
+
+                messages.append(msg)
+
+                for call in msg.tool_calls:
+                    func_name = call.function.name
+                    args = call.function.arguments
+                    
+                    if func_name == "submit_verdict":
+                        verdict_reached = True
+                        is_genuine = args.get("is_genuine_bug", True)
+                        
+                        if is_genuine:
+                            f_["severity"] = args.get("adjusted_severity", f_.get("severity", "medium"))
+                            f_["reviewer_notes"] = args.get("reasoning", "")
+                            verified.append(f_)
+                            print(f"    - Kept: {args.get('reasoning')}")
+                        else:
+                            print(f"    - Rejected: {args.get('reasoning')}")
+                        break
+
+                    # Execute read_file or search_code
+                    print(f"    > Evaluator Executing: {func_name}({args})")
+                    if func_name in available_tools:
+                        try:
+                            result = available_tools[func_name](**args)
+                        except Exception as e:
+                            result = f"Execution error: {e}"
+                    else:
+                        result = f"Error: Tool {func_name} not found."
+
+                    messages.append({
+                        "role": "tool",
+                        "content": str(result),
+                        "name": func_name
+                    })
+                
+                if verdict_reached:
+                    break
+            
+            if not verdict_reached:
+                print(f"    ! Evaluator hit turn limit, keeping finding by default.")
+                verified.append(f_)
+
+    finally:
+        os.chdir(original_dir)
 
     return verified
 
@@ -153,8 +206,10 @@ def write_report(target_dir: Path, findings: list) -> None:
             repro = f"\n**Steps to reproduce**\n{f.get('steps_to_reproduce')}\n" if f.get("steps_to_reproduce") else ""
             notes = f"\n> **Reviewer Notes:** {f.get('reviewer_notes')}\n" if f.get("reviewer_notes") else ""
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
-
-            solution = _strip_code_fence(f.get('suggested_solution', 'No fix provided.'))
+            
+            # Clean up nested markdown ticks
+            fix = f.get('suggested_solution', 'No fix provided.')
+            fix = fix.strip("`").strip() if fix.startswith("```") else fix
 
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"
@@ -162,7 +217,7 @@ def write_report(target_dir: Path, findings: list) -> None:
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{repro}{notes}\n"
-                f"**Suggested solution**\n```\n{solution}\n```\n\n"
+                f"**Suggested solution**\n```\n{fix}\n```\n\n"
             )
 
     with open(report_path, "w", encoding="utf-8") as f:

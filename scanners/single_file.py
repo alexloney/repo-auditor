@@ -55,7 +55,7 @@ class SingleFileScanner(BaseScanner):
             try:
                 data = call_json(self.client, self.model, SINGLE_FILE_PROMPT, user, FINDINGS_SCHEMA)
             except Exception as e:
-                print(f"    ! {relpath}: review failed -> {e}")
+                print(f"      ! {relpath}: review failed -> {e}")
                 continue
 
             findings = data.get("findings", [])
@@ -63,4 +63,4 @@ class SingleFileScanner(BaseScanner):
                 finding["file"] = relpath
                 append_finding(self.ledger_path, finding)
             if findings:
-                print(f"    {relpath}: {len(findings)} finding(s)")
+                print(f"      {relpath}: {len(findings)} finding(s)")
