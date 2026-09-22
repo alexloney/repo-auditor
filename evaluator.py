@@ -143,10 +143,11 @@ def write_report(target_dir: Path, findings: list) -> None:
         for f in findings:
             repro = f"\n**Steps to reproduce**\n{f.get('steps_to_reproduce')}\n" if f.get("steps_to_reproduce") else ""
             notes = f"\n> **Reviewer Notes:** {f.get('reviewer_notes')}\n" if f.get("reviewer_notes") else ""
-            
+            owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
+
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"
-                f"**Severity:** {f.get('severity')} · **Confidence:** {f.get('confidence', 'high')} · **Category:** {f.get('category', 'bug')}\n"
+                f"**Severity:** {f.get('severity')} · **Confidence:** {f.get('confidence', 'high')} · **Category:** {f.get('category', 'bug')}{owasp}\n"
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{repro}{notes}\n"
