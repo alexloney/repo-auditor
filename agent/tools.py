@@ -2,6 +2,18 @@ import os
 import json
 from pathlib import Path
 
+# Keep a wide safety margin below the 66k context window so a single huge file
+# can't blow the whole conversation budget on its own.
+MAX_READ_TOKENS = 15000
+
+def _estimate_tokens(text: str) -> int:
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
+
 # The agent's cwd is chdir'd to the target repo root before the tool loop starts.
 # All paths are resolved against that root and must not escape it, since the repo
 # content the agent reads is untrusted and could try to steer it (prompt injection)
@@ -32,7 +44,10 @@ def read_file(filepath: str) -> str:
     try:
         target = _resolve_within_root(filepath)
         with open(target, 'r', encoding='utf-8', errors='replace') as f:
-            return f.read()
+            content = f.read()
+        if _estimate_tokens(content) > MAX_READ_TOKENS:
+            return "File too large to read entirely. Skip this file."
+        return content
     except Exception as e:
         return f"Error reading file '{filepath}': {str(e)}"
 

@@ -59,7 +59,7 @@ def main():
 
     # The evaluation pass always runs last, independent of the plugins
     print("\n--- Running Final Evaluation ---")
-    run_evaluation(target_dir, ledger_path)
+    run_evaluation(client, target_dir, ledger_path)
 
 if __name__ == "__main__":
     main()

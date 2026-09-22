@@ -1,10 +1,9 @@
 import os
 import json
+import re
 from pathlib import Path
 from datetime import datetime
 import ollama
-
-client = ollama.Client(host="http://192.168.86.5:11434")
 
 # Extracted from the original .env design
 CRITIC_SYSTEM_PROMPT = os.getenv("CRITIC_SYSTEM_PROMPT", (
@@ -26,6 +25,16 @@ VERIFICATION_SCHEMA = {
     "required": ["is_genuine_bug", "reasoning", "adjusted_severity"]
 }
 
+def _strip_code_fence(text: str) -> str:
+    """Removes a wrapping ``` fence (with optional language tag) from LLM-generated code."""
+    if not text:
+        return text
+    stripped = text.strip()
+    match = re.match(r"^```[a-zA-Z0-9_+-]*\n?(.*?)\n?```$", stripped, re.DOTALL)
+    if match:
+        return match.group(1)
+    return stripped.strip('`').strip()
+
 def dedupe(findings: list) -> list:
     """Groups findings by file, category, and approximate line number to remove duplicates."""
     order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
@@ -45,7 +54,7 @@ def dedupe(findings: list) -> list:
     out.sort(key=lambda f_: order.get(f_.get("severity"), 9))
     return out
 
-def verify_findings(target_dir: Path, findings: list, model: str) -> list:
+def verify_findings(client: ollama.Client, target_dir: Path, findings: list, model: str) -> list:
     """Passes each finding back to the LLM with a +/- 100 line context window."""
     verified = []
     
@@ -145,13 +154,15 @@ def write_report(target_dir: Path, findings: list) -> None:
             notes = f"\n> **Reviewer Notes:** {f.get('reviewer_notes')}\n" if f.get("reviewer_notes") else ""
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
 
+            solution = _strip_code_fence(f.get('suggested_solution', 'No fix provided.'))
+
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"
                 f"**Severity:** {f.get('severity')} · **Confidence:** {f.get('confidence', 'high')} · **Category:** {f.get('category', 'bug')}{owasp}\n"
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{repro}{notes}\n"
-                f"**Suggested solution**\n```\n{f.get('suggested_solution', 'No fix provided.')}\n```\n\n"
+                f"**Suggested solution**\n```\n{solution}\n```\n\n"
             )
 
     with open(report_path, "w", encoding="utf-8") as f:
@@ -159,7 +170,7 @@ def write_report(target_dir: Path, findings: list) -> None:
     
     print(f"  [Evaluator] Report written -> {report_path}")
 
-def run_evaluation(target_dir: Path, ledger_path: Path):
+def run_evaluation(client: ollama.Client, target_dir: Path, ledger_path: Path):
     """Entry point for the evaluation pass."""
     model = os.getenv("MODEL", "qwen-coder-64k:latest")
     
@@ -187,7 +198,7 @@ def run_evaluation(target_dir: Path, ledger_path: Path):
     print(f"  [Evaluator] {len(unique_findings)} unique finding(s) before verification.")
     
     if unique_findings:
-        verified_findings = verify_findings(target_dir, unique_findings, model)
+        verified_findings = verify_findings(client, target_dir, unique_findings, model)
         print(f"  [Evaluator] {len(verified_findings)} finding(s) survived critic pass.")
     else:
         verified_findings = []
