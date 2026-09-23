@@ -6,6 +6,8 @@ class BaseScanner(ABC):
     # Class attributes allow the CLI to read the ID without instantiating the class
     id: str = ""
     name: str = ""
+    # Set by the plugin loader; False for modules whose filename starts with '_'.
+    auto_enabled: bool = True
 
     def __init__(self, client: ollama.Client, target_dir: Path, ledger_path: Path):
         self.client = client

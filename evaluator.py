@@ -206,6 +206,7 @@ def write_report(target_dir: Path, findings: list) -> None:
             repro = f"\n**Steps to reproduce**\n{f.get('steps_to_reproduce')}\n" if f.get("steps_to_reproduce") else ""
             notes = f"\n> **Reviewer Notes:** {f.get('reviewer_notes')}\n" if f.get("reviewer_notes") else ""
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
+            vuln = f" · **Class:** {f.get('vuln_class')}" if f.get("vuln_class") else ""
             
             # Clean up nested markdown ticks
             fix = f.get('suggested_solution', 'No fix provided.')
@@ -213,7 +214,7 @@ def write_report(target_dir: Path, findings: list) -> None:
 
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"
-                f"**Severity:** {f.get('severity')} · **Confidence:** {f.get('confidence', 'high')} · **Category:** {f.get('category', 'bug')}{owasp}\n"
+                f"**Severity:** {f.get('severity')} · **Confidence:** {f.get('confidence', 'high')} · **Category:** {f.get('category', 'bug')}{owasp}{vuln}\n"
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{repro}{notes}\n"

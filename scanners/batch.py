@@ -15,6 +15,9 @@ from .common import (
     estimate_tokens,
 )
 
+# The planner must echo back every path it is shown, so cap how many it sees at once.
+PLANNER_WINDOW = int(os.getenv("PLANNER_WINDOW", "40"))
+
 PLANNER_SYSTEM_PROMPT = os.getenv("PLANNER_SYSTEM_PROMPT", (
     "You are an expert software architect planning a code review. "
     "I will provide a list of source files from a repository. "
@@ -113,36 +116,19 @@ class BatchScanner(BaseScanner):
 
     def _plan_batches(self, files: list) -> list:
         """Asks the LLM to cluster files based on imports and naming conventions."""
-        file_summaries = []
-        for relpath in files:
-            full = self.target_dir / relpath
-            imports = []
+        # Planning is done in windows: the model must echo back every path it is given,
+        # so one request covering hundreds of files would blow the output budget.
+        llm_batches = []
+        for start in range(0, len(files), PLANNER_WINDOW):
+            window = files[start:start + PLANNER_WINDOW]
+            user = "Repository files to group:\n" + "\n".join(self._summarize(rel) for rel in window)
+            print(f"  [Batch Scan] Planning files {start + 1}-{start + len(window)} of {len(files)}...")
+
             try:
-                with open(full, "r", encoding="utf-8", errors="ignore") as f:
-                    for _ in range(30):  # Check the top of the file for imports
-                        line = f.readline()
-                        if not line:
-                            break
-                        line = line.strip()
-                        if line.startswith("import ") or line.startswith("from ") or line.startswith("#include"):
-                            imports.append(line)
-            except OSError:
-                pass
-
-            summary = f"- {relpath}"
-            if imports:
-                summary += f"  (Imports: {', '.join(imports[:3])}...)"
-            file_summaries.append(summary)
-
-        user = "Repository files to group:\n" + "\n".join(file_summaries)
-        print(f"  [Batch Scan] Asking LLM to group {len(files)} file(s) logically...")
-
-        try:
-            data = call_json(self.client, self.model, PLANNER_SYSTEM_PROMPT, user, BATCH_PLAN_SCHEMA)
-            llm_batches = data.get("batches", [])
-        except Exception as e:
-            print(f"    ! Planner failed, falling back to sequential batching: {e}")
-            llm_batches = []
+                data = call_json(self.client, self.model, PLANNER_SYSTEM_PROMPT, user, BATCH_PLAN_SCHEMA)
+                llm_batches.extend(data.get("batches", []))
+            except Exception as e:
+                print(f"    ! Planner window failed, these files fall back to sequential batching: {e}")
 
         # LLMs occasionally hallucinate or drop items; reconcile against the real file list.
         valid_batches = []
@@ -166,3 +152,23 @@ class BatchScanner(BaseScanner):
                 valid_batches.append(orphans[i:i + MAX_FILES_PER_BATCH])
 
         return valid_batches
+
+    def _summarize(self, relpath: str) -> str:
+        """One-line description of a file, including its first few imports, for the planner."""
+        imports = []
+        try:
+            with open(self.target_dir / relpath, "r", encoding="utf-8", errors="ignore") as f:
+                for _ in range(30):  # Check the top of the file for imports
+                    line = f.readline()
+                    if not line:
+                        break
+                    line = line.strip()
+                    if line.startswith("import ") or line.startswith("from ") or line.startswith("#include"):
+                        imports.append(line)
+        except OSError:
+            pass
+
+        summary = f"- {relpath}"
+        if imports:
+            summary += f"  (Imports: {', '.join(imports[:3])}...)"
+        return summary

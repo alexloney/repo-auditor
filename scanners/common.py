@@ -10,7 +10,9 @@ from pathlib import Path
 
 MODEL = os.getenv("MODEL", "qwen-coder-64k:latest")
 MAX_CONTEXT = int(os.getenv("MAX_CONTEXT", "66000"))
-MAX_FILES_PER_REPO = int(os.getenv("MAX_FILES_PER_REPO", "60"))
+# num_ctx covers prompt + completion, so hold tokens back for the response.
+OUTPUT_RESERVE = int(os.getenv("OUTPUT_RESERVE", "10000"))
+MAX_FILES_PER_REPO = int(os.getenv("MAX_FILES_PER_REPO", "256"))
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", "100000"))
 TARGET_FILE_SIZE = int(os.getenv("TARGET_FILE_SIZE", "15000"))
 MAX_FILES_PER_BATCH = int(os.getenv("MAX_FILES_PER_BATCH", "4"))
@@ -25,6 +27,36 @@ LANG_EXT = {
     ".cxx": "C++",
     ".hpp": "C++ header",
     ".hh": "C++ header",
+    ".js": "JavaScript",
+    ".jsx": "JavaScript (JSX)",
+    ".mjs": "JavaScript",
+    ".cjs": "JavaScript",
+    ".ts": "TypeScript",
+    ".tsx": "TypeScript (JSX)",
+    ".vue": "Vue",
+    ".php": "PHP",
+    ".java": "Java",
+    ".kt": "Kotlin",
+    ".kts": "Kotlin",
+    ".go": "Go",
+    ".rs": "Rust",
+    ".rb": "Ruby",
+    ".cs": "C#",
+    ".swift": "Swift",
+    ".m": "Objective-C",
+    ".mm": "Objective-C++",
+    ".scala": "Scala",
+    ".pl": "Perl",
+    ".pm": "Perl",
+    ".sh": "Shell",
+    ".bash": "Shell",
+    ".lua": "Lua",
+    ".dart": "Dart",
+}
+
+# Languages with manual memory management, where the memory-safety scanner applies.
+C_FAMILY_EXT = {
+    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".m", ".mm",
 }
 
 # Directories to skip entirely.
@@ -117,6 +149,51 @@ OWASP_FINDINGS_SCHEMA = {
     "required": ["findings"],
 }
 
+MEMORY_VULN_CLASSES = [
+    "buffer-overflow",
+    "out-of-bounds-write",
+    "out-of-bounds-read",
+    "use-after-free",
+    "double-free",
+    "uninitialized-memory",
+    "integer-overflow-leading-to-overflow",
+]
+
+MEMORY_FINDINGS_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "findings": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "title": {"type": "string", "description": "Short, specific name of the memory-safety defect."},
+                    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+                    "vuln_class": {"type": "string", "enum": MEMORY_VULN_CLASSES},
+                    "file": {"type": "string"},
+                    "line": {"type": ["integer", "null"], "description": "Absolute 1-indexed line number shown in the snippet gutter."},
+                    "confidence": {
+                        "type": "string",
+                        "enum": ["high", "medium", "low"],
+                        "description": "Must be 'low' if the defect depends on buffer sizes or callers not visible in this snippet.",
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Explain the allocation, the write/read bound, and why it can exceed or outlive the allocation.",
+                    },
+                    "steps_to_reproduce": {"type": ["string", "null"]},
+                    "suggested_solution": {"type": "string", "description": "Concrete minimal fix (code snippet)."},
+                },
+                "required": [
+                    "title", "severity", "vuln_class", "file",
+                    "description", "confidence", "suggested_solution",
+                ],
+            },
+        },
+    },
+    "required": ["findings"],
+}
+
 BATCH_PLAN_SCHEMA = {
     "type": "object",
     "properties": {
@@ -142,7 +219,7 @@ def estimate_tokens(text: str) -> int:
         return max(1, len(text) // 4)
 
 
-def is_auditable(relpath: str) -> bool:
+def is_auditable(relpath: str, extensions: set | None = None) -> bool:
     parts = relpath.replace("\\", "/").lower().split("/")
 
     if any(p in SKIP_DIRS for p in parts[:-1]):
@@ -153,10 +230,11 @@ def is_auditable(relpath: str) -> bool:
         return False
 
     ext = os.path.splitext(filename)[1]
-    return ext in LANG_EXT
+    allowed = LANG_EXT if extensions is None else extensions
+    return ext in allowed
 
 
-def pick_files(target_dir: Path) -> list:
+def pick_files(target_dir: Path, extensions: set | None = None) -> list:
     """Walks target_dir and returns a size-bounded, size-prioritized list of relative paths."""
     found = []
     for root, dirs, files in os.walk(target_dir):
@@ -165,7 +243,7 @@ def pick_files(target_dir: Path) -> list:
         for name in files:
             full = Path(root) / name
             rel = str(full.relative_to(target_dir))
-            if not is_auditable(rel):
+            if not is_auditable(rel, extensions):
                 continue
 
             try:
@@ -186,8 +264,30 @@ def number_lines(content: str) -> str:
     return "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(content.splitlines()))
 
 
+def input_budget() -> int:
+    return MAX_CONTEXT - OUTPUT_RESERVE
+
+
+def _strip_json_fence(raw: str) -> str:
+    """Unwraps a ```json ... ``` fence some models emit despite structured-output mode."""
+    if raw.startswith("```"):
+        newline = raw.find("\n")
+        if newline != -1:
+            raw = raw[newline + 1:]
+        if raw.rstrip().endswith("```"):
+            raw = raw.rstrip()[:-3]
+    return raw.strip()
+
+
 def call_json(client, model: str, system: str, user: str, schema: dict, retries: int = 3) -> dict:
     """Calls the LLM with a JSON schema response format, retrying on transient failures."""
+    prompt_tokens = estimate_tokens(system) + estimate_tokens(user)
+    if prompt_tokens > input_budget():
+        raise RuntimeError(
+            f"prompt is ~{prompt_tokens} tokens, over the {input_budget()} input budget "
+            f"(num_ctx {MAX_CONTEXT} minus {OUTPUT_RESERVE} reserved for output)"
+        )
+
     last_err = None
     for attempt in range(1, retries + 1):
         try:
@@ -198,13 +298,26 @@ def call_json(client, model: str, system: str, user: str, schema: dict, retries:
                     {"role": "user", "content": user},
                 ],
                 format=schema,
-                options={"temperature": 0.0, "num_ctx": MAX_CONTEXT},
+                # Retries nudge temperature upward; at 0.0 a retry is deterministic and
+                # would reproduce the same empty/invalid completion every time.
+                options={
+                    "temperature": 0.0 + 0.2 * (attempt - 1),
+                    "num_ctx": MAX_CONTEXT,
+                    "num_predict": OUTPUT_RESERVE,
+                },
             )
-            return json.loads(resp.message.content)
+            raw = (resp.message.content or "").strip()
+            if not raw:
+                raise ValueError(
+                    f"model returned an empty completion "
+                    f"(done_reason={getattr(resp, 'done_reason', 'unknown')}, prompt ~{prompt_tokens} tokens)"
+                )
+            return json.loads(_strip_json_fence(raw))
         except Exception as e:
             last_err = e
             print(f"    call_json attempt {attempt}/{retries} failed: {e}")
-            time.sleep(2 * attempt)
+            if attempt < retries:
+                time.sleep(2 * attempt)
     raise RuntimeError(f"call_json failed after {retries} tries: {last_err}")
 
 

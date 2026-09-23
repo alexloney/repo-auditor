@@ -12,7 +12,11 @@ import ollama
 client = ollama.Client(host="http://192.168.86.5:11434")
 
 def get_available_scanners() -> dict[str, type[BaseScanner]]:
-    """Dynamically loads all BaseScanner subclasses from the scanners package."""
+    """Dynamically loads all BaseScanner subclasses from the scanners package.
+
+    Modules whose filename starts with '_' are still loadable by name but are
+    excluded from the default 'all' selection.
+    """
     registry = {}
     
     # Iterate through all files in the scanners/ directory
@@ -22,26 +26,41 @@ def get_available_scanners() -> dict[str, type[BaseScanner]]:
         # Find classes that inherit from BaseScanner (but ignore the base class itself)
         for _, obj in inspect.getmembers(module, inspect.isclass):
             if issubclass(obj, BaseScanner) and obj is not BaseScanner:
+                obj.auto_enabled = not module_name.startswith("_")
                 registry[obj.id] = obj
                 
     return registry
 
 def main():
     parser = argparse.ArgumentParser(description="Pluggable LLM Repository Auditor")
-    parser.add_argument("repo_path", type=str, help="Target repository directory")
+    parser.add_argument("repo_path", type=str, nargs="?", help="Target repository directory")
     parser.add_argument("--scans", type=str, default="all", 
-                        help="Comma-separated list of scans (e.g., shallow,deep,security). Default: all")
+                        help="Comma-separated list of scans (e.g., shallow,taint,memory). Default: all")
+    parser.add_argument("--list", action="store_true", help="List available scan plugins and exit")
     args = parser.parse_args()
+
+    # Load all plugins dynamically
+    available_scanners = get_available_scanners()
+
+    if args.list:
+        print("Available scan plugins:")
+        for scan_id, cls in sorted(available_scanners.items()):
+            state = "" if cls.auto_enabled else "  (disabled: module name starts with '_')"
+            print(f"  {scan_id:<12} {cls.name}{state}")
+        return
+
+    if not args.repo_path:
+        parser.error("repo_path is required unless --list is given")
 
     target_dir = Path(args.repo_path).resolve()
     ledger_path = target_dir / "findings.json"
-    
-    # Load all plugins dynamically
-    available_scanners = get_available_scanners()
-    
+
     # Parse CLI selection
     if args.scans.lower() == "all":
-        selected_ids = list(available_scanners.keys())
+        selected_ids = [sid for sid, cls in available_scanners.items() if cls.auto_enabled]
+        skipped = [sid for sid, cls in available_scanners.items() if not cls.auto_enabled]
+        if skipped:
+            print(f"[*] Disabled plugin(s) excluded from 'all': {', '.join(sorted(skipped))}")
     else:
         selected_ids = [s.strip().lower() for s in args.scans.split(",")]
 

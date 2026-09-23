@@ -5,6 +5,7 @@ from pathlib import Path
 # Keep a wide safety margin below the 66k context window so a single huge file
 # can't blow the whole conversation budget on its own.
 MAX_READ_TOKENS = 15000
+MAX_SEARCH_RESULTS = 100
 
 def _estimate_tokens(text: str) -> int:
     try:
@@ -51,6 +52,31 @@ def read_file(filepath: str) -> str:
     except Exception as e:
         return f"Error reading file '{filepath}': {str(e)}"
 
+def read_file_range(filepath: str, start_line: int, end_line: int) -> str:
+    """
+    Reads a specific 1-indexed, inclusive line range of a source file, prefixed with line numbers.
+    Use this to inspect a region of a file that is too large to read in full.
+    """
+    try:
+        target = _resolve_within_root(filepath)
+        with open(target, 'r', encoding='utf-8', errors='replace') as f:
+            lines = f.read().splitlines()
+
+        start = max(1, int(start_line))
+        end = min(len(lines), int(end_line))
+        if start > len(lines):
+            return f"File '{filepath}' only has {len(lines)} lines."
+        if end < start:
+            end = start
+
+        selected = [f"{i:4d} | {lines[i - 1]}" for i in range(start, end + 1)]
+        snippet = "\n".join(selected)
+        if _estimate_tokens(snippet) > MAX_READ_TOKENS:
+            return "Requested range is too large. Request a narrower line range."
+        return snippet
+    except Exception as e:
+        return f"Error reading file '{filepath}': {str(e)}"
+
 def search_code(query: str, directory: str = ".") -> str:
     """
     Searches for a specific text string across all files in the directory.
@@ -59,6 +85,7 @@ def search_code(query: str, directory: str = ".") -> str:
     try:
         target = _resolve_within_root(directory)
         results = []
+        truncated = False
         for root, dirs, files in os.walk(target):
             # Skip hidden directories like .git (prune in-place so os.walk doesn't descend)
             dirs[:] = [d for d in dirs if not d.startswith('.')]
@@ -75,11 +102,23 @@ def search_code(query: str, directory: str = ".") -> str:
                         for i, line in enumerate(f):
                             if query in line:
                                 rel_path = path.relative_to(Path.cwd().resolve())
-                                results.append(f"{rel_path}:{i+1}: {line.strip()}")
+                                results.append(f"{rel_path}:{i+1}: {line.strip()[:300]}")
+                                if len(results) >= MAX_SEARCH_RESULTS:
+                                    truncated = True
+                                    break
                 except Exception:
                     continue
 
-        return "\n".join(results) if results else f"No matches found for '{query}'."
+                if truncated:
+                    break
+            if truncated:
+                break
+
+        if not results:
+            return f"No matches found for '{query}'."
+        if truncated:
+            results.append(f"... results truncated at {MAX_SEARCH_RESULTS} matches. Use a more specific query.")
+        return "\n".join(results)
     except Exception as e:
         return f"Error searching code: {str(e)}"
 
