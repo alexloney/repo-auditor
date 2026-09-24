@@ -76,9 +76,13 @@ pip install ollama
 pip install tiktoken   # optional, see below
 ```
 
-**`tiktoken` is optional.** It is used for token estimation when packing prompts. If it is not
-installed, every call site falls back to a `len(text) // 4` heuristic. Installing it makes the
-context-budget maths meaningfully more accurate, which reduces truncated/empty LLM responses.
+**`tiktoken` is strongly recommended.** It is used for token estimation when packing prompts and
+when deciding if an agent's conversation needs compacting. Without it, every call site falls back
+to a deliberately pessimistic `len(text) // 3` heuristic. Source code tokenizes far denser than
+prose, and under-counting causes context overflow — which Ollama handles by silently discarding
+the oldest tokens, dropping the system and initial user turns and making the server reject the
+request with `no user query found in messages`. Installing `tiktoken` makes the budget maths
+accurate and avoids relying on the heuristic's safety margin.
 
 ### Ollama
 

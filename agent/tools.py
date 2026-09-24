@@ -13,7 +13,8 @@ def _estimate_tokens(text: str) -> int:
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
     except Exception:
-        return max(1, len(text) // 4)
+        # Matches scanners.common.estimate_tokens; source code tokenizes denser than prose.
+        return max(1, len(text) // 3)
 
 # The agent's cwd is chdir'd to the target repo root before the tool loop starts.
 # All paths are resolved against that root and must not escape it, since the repo

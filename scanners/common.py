@@ -216,7 +216,9 @@ def estimate_tokens(text: str) -> int:
         enc = tiktoken.get_encoding("cl100k_base")
         return len(enc.encode(text))
     except Exception:
-        return max(1, len(text) // 4)
+        # Deliberately pessimistic: source code tokenizes denser than prose, and
+        # under-counting here leads to context overflow rather than a skipped file.
+        return max(1, len(text) // 3)
 
 
 def is_auditable(relpath: str, extensions: set | None = None) -> bool:
