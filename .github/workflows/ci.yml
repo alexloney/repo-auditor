@@ -46,7 +46,7 @@ jobs:
 
     # Upload HTML interactive report for the primary Python version
     - name: Upload HTML Coverage Artifact
-      if: matrix.python-version == '3.12'
+      if: matrix.python-version == '3.13'
       uses: actions/upload-artifact@v4
       with:
         name: html-coverage-report
