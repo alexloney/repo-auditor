@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from auditor.cli import main, parse_args
+from auditor.cli import main, parse_args, list_scanners
 
 def test_parse_args_with_target():
     args = parse_args(["/fake/repo"])
@@ -41,3 +41,56 @@ def test_parse_args_with_default_ollama():
     args = parse_args(["/fake/repo"])
     assert args.repo_path == "/fake/repo"
     assert args.ollama == "localhost:11434"
+
+def test_parse_args_with_ledger():
+    args = parse_args(["/fake/repo", "--ledger", "custom-ledger"])
+    assert args.repo_path == "/fake/repo"
+    assert args.ledger == "custom-ledger"
+
+def test_parse_args_with_default_ledger():
+    args = parse_args(["/fake/repo"])
+    assert args.repo_path == "/fake/repo"
+    assert args.ledger == "findings.json"
+
+def test_parse_args_with_report():
+    args = parse_args(["/fake/repo", "--report", "custom-report"])
+    assert args.repo_path == "/fake/repo"
+    assert args.report == "custom-report"
+
+def test_parse_args_with_default_report():
+    args = parse_args(["/fake/repo"])
+    assert args.repo_path == "/fake/repo"
+    assert args.report == "report.md"
+
+
+# This will allow us to replace the "get_available_scanners()"
+# funciton with a mocked return value, so we don't need to
+# actually have the test scan the physical filesystem.
+@patch("auditor.cli.get_available_scanners")
+def test_list_scanners(mock_get_scanners, capsys):
+    # Create two mock return values for scan results and
+    # set them as our mocked return value.
+    mock_enabled = MagicMock()
+    mock_enabled.name = "Shallow Syntax Scan"
+    mock_enabled.auto_enabled = True
+    mock_disabled = MagicMock()
+    mock_disabled.name = "Deep Taint Scan"
+    mock_disabled.auto_enabled = False
+    mock_get_scanners.return_value = {
+        "shallow": mock_enabled,
+        "_taint": mock_disabled
+    }
+
+    # Now we execute our scanner list and capture the
+    # STDOUT/STDERR output.
+    exit_code = list_scanners()
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # And verify that the expected output was captured
+    assert exit_code == 0
+    assert "Available scan plugins:" in output
+    assert "shallow" in output
+    assert "Shallow Syntax Scan" in output
+    assert "_taint" in output
+    assert "(disabled: module name starts with '_')" in output
