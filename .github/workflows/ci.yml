@@ -34,7 +34,7 @@ jobs:
         PYTHONPATH: src
       run: |
         # Generate terminal output, an XML report, and an HTML report directory
-        pytest --cov=my_app --cov-report=term-missing --cov-report=xml --cov-report=html:htmlcov | tee coverage.txt
+        pytest --cov=auditor --cov-report=term-missing --cov-report=xml --cov-report=html:htmlcov | tee coverage.txt
 
     - name: Publish Coverage to Job Summary
       if: always()
