@@ -1,0 +1,53 @@
+name: Python CI
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest pytest-cov
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Run Pytest with Coverage
+      env:
+        PYTHONPATH: src
+      run: |
+        # Generate terminal output, an XML report, and an HTML report directory
+        pytest --cov=my_app --cov-report=term-missing --cov-report=xml --cov-report=html:htmlcov | tee coverage.txt
+
+    - name: Publish Coverage to Job Summary
+      if: always()
+      run: |
+        echo "### Code Coverage Summary (Python ${{ matrix.python-version }})" >> $GITHUB_STEP_SUMMARY
+        echo '```text' >> $GITHUB_STEP_SUMMARY
+        cat coverage.txt | grep -A 20 "Name.*Stmts.*Miss.*Cover" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+
+    # Upload HTML interactive report for the primary Python version
+    - name: Upload HTML Coverage Artifact
+      if: matrix.python-version == '3.12'
+      uses: actions/upload-artifact@v4
+      with:
+        name: html-coverage-report
+        path: htmlcov/
