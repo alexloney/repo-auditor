@@ -9,7 +9,13 @@ def parse_args(args=None):
     parser.add_argument("--scans", type=str, default="all", help="Comma-separated list of scanners. Default: all")
     parser.add_argument("--list", action="store_true", help="List available scan plugins and exit")
     
-    return parser.parse_args(args)
+    parsed = parser.parse_args(args)
+
+    if not parsed.repo_path and not parsed.list:
+        parser.print_help()
+        sys.exit(1)
+
+    return parsed
 
 def main(args=None):
     parsed_args = parse_args(args)
