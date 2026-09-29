@@ -2,7 +2,7 @@ import argparse
 import importlib
 import sys
 from pathlib import Path
-from auditor.pipeline import execute_audit, get_available_scanners
+from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners
 
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Audit a code repository.")
@@ -38,9 +38,15 @@ def main(args=None):
     if parsed_args.list:
         return list_scanners()
 
+    registry = get_available_scanners()
+    selected_scanners, skipped_ids = filter_scanners(parsed_args.scans, registry)
+
+    if skipped_ids:
+        print(f"[*] Disabled plugin(s) excluded from 'all': {', '.join(sorted(skipped_ids))}")
+
     return execute_audit(
         target_dir=Path(parsed_args.repo_path),
-        requested_scans=parsed_args.scans,
+        scanners_to_run=selected_scanners,
         model=parsed_args.model,
         ollama_host=parsed_args.ollama,
         ledger_file=parsed_args.ledger,

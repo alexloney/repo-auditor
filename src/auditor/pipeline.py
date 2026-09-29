@@ -27,16 +27,37 @@ def get_available_scanners() -> dict[str, type[BaseScanner]]:
                 
     return registry
 
-def execute_audit(target_dir: Path, requested_scans: str, model: str, ollama_host: str, ledger_file: str, report_file: str):
+def filter_scanners(requested_scans: str, available_scanners: dict[str, type[BaseScanner]]) -> tuple[list[type[BaseScanner]], list[str]]:
+    """Filters scanners and returns (selected_scanners, skipped_ids)."""
+    selected_ids = []
+    skipped_ids = []
+
+    if requested_scans.lower() == "all":
+        selected_ids = [sid for sid, cls in available_scanners.items() if cls.auto_enabled]
+        skipped_ids = [sid for sid, cls in available_scanners.items() if not cls.auto_enabled]
+    else:
+        selected_ids = [s.strip().lower() for s in requested_scans.split(",")]
+
+    selected_scanners = [available_scanners[sid] for sid in selected_ids if sid in available_scanners]
+    return selected_scanners, skipped_ids
+
+def execute_audit(target_dir: Path, 
+                  scanners_to_run: list[type[BaseScanner]], 
+                  model: str, 
+                  ollama_host: str, 
+                  ledger_file: str, 
+                  report_file: str):
     client = ollama.Client(host=f"http://{ollama_host}")
 
-    registry = get_available_scanners()
-    scanners_to_run = []
+    # Obtain a list of all scanner plugins available in the system
+    available_scanners = get_available_scanners()
 
-    if requested_scans == "all":
-        scanners_to_run = [scanner() for scanner in registry.values() if scanner.auto_enabled]
-    else:
-        for scan_id in requested_scans.split(","):
-            if scan_id in registry:
-                scanners_to_run.append(registry[scan_id]())
+    # TODO: Implement loop and execute scanner
+
+    # TODO: Implement verification
+
+    # TODO: Generate report
+
+
+
     
