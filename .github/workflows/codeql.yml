@@ -1,0 +1,28 @@
+name: "CodeQL Python Scan"
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      contents: read
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    # Initializes the CodeQL database specifically for Python
+    - name: Initialize CodeQL
+      uses: github/codeql-action/init@v3
+      with:
+        languages: 'python'
+
+    # Executes the query packs and uploads the SARIF report to GitHub
+    - name: Perform CodeQL Analysis
+      uses: github/codeql-action/analyze@v3
