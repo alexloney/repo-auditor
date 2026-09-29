@@ -228,7 +228,7 @@ def is_auditable(relpath: str, extensions: set | None = None) -> bool:
         return False
 
     filename = parts[-1]
-    if "test" in filename or "min" in filename or ".min." in filename:
+    if "test" in filename or ".min." in filename:
         return False
 
     ext = os.path.splitext(filename)[1]
