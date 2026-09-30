@@ -36,7 +36,8 @@ def list_scanners():
 
 def main(args=None):
     parsed_args = parse_args(args)
-    target = Path(parsed_args.repo_path).resolve()
+    raw_target = parsed_args.repo_path[0] if isinstance(parsed_args.repo_path, list) else parsed_args.repo_path
+    target = Path(raw_target).resolve()
 
     if parsed_args.list:
         return list_scanners()

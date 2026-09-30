@@ -98,7 +98,7 @@ def execute_audit(target_dir: Path,
     on_progress(f"{len(unique_findings)} unique finding(s) before verification.") if on_progress else None
     
     if unique_findings:
-        verified_findings = verify_findings(client, target_dir, unique_findings, model)
+        verified_findings = verify_findings(client, model, target_dir, unique_findings)
         on_progress(f"{len(verified_findings)} finding(s) survived critic pass.") if on_progress else None
     else:
         verified_findings = []
