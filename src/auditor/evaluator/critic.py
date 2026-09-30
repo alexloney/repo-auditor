@@ -43,7 +43,7 @@ def verify_findings(client: ollama.Client,
 
             full_path = (target_dir / file_path).resolve()
             if target_dir.resolve() not in full_path.parents and full_path != target_dir.resolve():
-                on_warning(f"  [Evaluator] ! Rejected finding with out-of-repo path: {file_path}")
+                on_warning(f" ! Rejected finding with out-of-repo path: {file_path}")
                 continue
 
             try:
@@ -74,7 +74,7 @@ def verify_findings(client: ollama.Client,
                 f"Reported Finding to verify:\n{finding_payload}"
             )
 
-            on_progress(f"  [Evaluator] Verifying {idx+1}/{len(findings)}: '{f_.get('title')}'") if on_progress else None
+            on_progress(f"Verifying {idx+1}/{len(findings)}: '{f_.get('title')}'") if on_progress else None
             
             messages = [
                 {"role": "system", "content": CRITIC_SYSTEM_PROMPT},
@@ -92,7 +92,7 @@ def verify_findings(client: ollama.Client,
                         options={"temperature": 0.0}
                     )
                 except Exception as e:
-                    on_warning(f"  [Evaluator] ! Critic call failed, keeping finding: {e}") if on_warning else None
+                    on_warning(f" ! Critic call failed, keeping finding: {e}") if on_warning else None
                     verified.append(f_)
                     verdict_reached = True
                     break
@@ -122,13 +122,13 @@ def verify_findings(client: ollama.Client,
                             f_["severity"] = args.get("adjusted_severity", f_.get("severity", "medium"))
                             f_["reviewer_notes"] = args.get("reasoning", "")
                             verified.append(f_)
-                            on_progress(f"  [Evaluator] - Kept: {args.get('reasoning')}") if on_progress else None
+                            on_progress(f" - Kept: {args.get('reasoning')}") if on_progress else None
                         else:
-                            on_progress(f"  [Evaluator] - Rejected: {args.get('reasoning')}") if on_progress else None
+                            on_progress(f" - Rejected: {args.get('reasoning')}") if on_progress else None
                         break
 
                     # Execute read_file or search_code
-                    on_progress(f"  [Evaluator] > Executing: {func_name}({args})") if on_progress else None
+                    on_progress(f" > Executing: {func_name}({args})") if on_progress else None
                     if func_name in available_tools:
                         try:
                             result = available_tools[func_name](**args)
@@ -147,7 +147,7 @@ def verify_findings(client: ollama.Client,
                     break
             
             if not verdict_reached:
-                on_warning(f"  [Evaluator] ! Hit turn limit, keeping finding by default.") if on_warning else None
+                on_warning(f" ! Hit turn limit, keeping finding by default.") if on_warning else None
                 verified.append(f_)
 
     finally:

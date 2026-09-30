@@ -70,9 +70,9 @@ def execute_audit(target_dir: Path,
             ledger_path=ledger_path,
             extensions=extensions,
             skip_dirs=skip_dirs,
-            on_progress=lambda msg: on_progress(f"  [{scanner_class.name}] " + msg) if on_progress else None,
-            on_warning=lambda msg: on_warning(f"  [{scanner_class.name}] " + msg) if on_warning else None,
-            on_error=lambda msg: on_error(f"  [{scanner_class.name}] " + msg) if on_error else None,
+            on_progress=lambda msg: on_progress(f"  [{scanner_class.name}] {msg}") if on_progress else None,
+            on_warning=lambda msg: on_warning(f"  [{scanner_class.name}] {msg}") if on_warning else None,
+            on_error=lambda msg: on_error(f"  [{scanner_class.name}] {msg}") if on_error else None,
         )
         scanner_instance.run()
 
@@ -98,7 +98,13 @@ def execute_audit(target_dir: Path,
     on_progress(f"{len(unique_findings)} unique finding(s) before verification.") if on_progress else None
     
     if unique_findings:
-        verified_findings = verify_findings(client, model, target_dir, unique_findings)
+        verified_findings = verify_findings(client, 
+                                            model, 
+                                            target_dir, 
+                                            unique_findings, 
+                                            on_progress=lambda msg: on_progress(f"  [Critic] {msg}") if on_progress else None, 
+                                            on_warning=lambda msg: on_warning(f"  [Critic] {msg}") if on_warning else None, 
+                                            on_error=lambda msg: on_error(f"  [Critic] {msg}") if on_error else None)
         on_progress(f"{len(verified_findings)} finding(s) survived critic pass.") if on_progress else None
     else:
         verified_findings = []
