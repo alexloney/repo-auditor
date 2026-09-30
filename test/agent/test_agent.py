@@ -6,6 +6,8 @@ from auditor.agent.agent import (
     _message_parts,
     _history_digest,
     _compact_history,
+    _execute_tools,
+    _chat_with_retries,
     run_agent_loop,
     MAX_CONSECUTIVE_ERRORS,
     MAX_CONSECUTIVE_EMPTY
@@ -176,3 +178,127 @@ def test_run_agent_loop_empty_completions(mock_compact, agent_setup):
     
     # The compactor is called to recover from the 1st and 2nd failures, but skipped on the final fatal 3rd failure
     assert mock_compact.call_count == MAX_CONSECUTIVE_EMPTY - 1
+
+
+
+# --- 5. Extracted Helper Tests ---
+
+def test_execute_tools_success():
+    """Verifies that valid tools are executed and their results are formatted correctly."""
+    def dummy_add(a, b):
+        return a + b
+    
+    available = {"dummy_add": dummy_add}
+    calls = [make_mock_call("dummy_add", {"a": 2, "b": 3})]
+    mock_progress = MagicMock()
+    
+    results = _execute_tools(calls, available, mock_progress)
+    
+    assert len(results) == 1
+    assert results[0]["role"] == "tool"
+    assert results[0]["name"] == "dummy_add"
+    assert results[0]["content"] == "5"
+    mock_progress.assert_called_once_with(" > Executing: dummy_add({'a': 2, 'b': 3})")
+
+def test_execute_tools_exception():
+    """Verifies that tool crashes are caught and returned to the LLM as error strings."""
+    def crash_tool():
+        raise ValueError("Something broke")
+        
+    available = {"crash_tool": crash_tool}
+    calls = [make_mock_call("crash_tool", {})]
+    
+    results = _execute_tools(calls, available, MagicMock())
+    
+    assert "Execution error: Something broke" in results[0]["content"]
+
+def test_execute_tools_not_found():
+    """Verifies behavior when the LLM hallucinates a tool that doesn't exist."""
+    available = {}
+    calls = [make_mock_call("fake_tool", {})]
+    
+    results = _execute_tools(calls, available, MagicMock())
+    
+    assert "Error: Tool fake_tool not found" in results[0]["content"]
+
+@patch(f"{run_agent_loop.__module__}._compact_history")
+def test_chat_with_retries_success(mock_compact):
+    """Verifies a successful chat call returns 'success' and resets error tracking."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(content="Valid output")
+    error_state = {"errors": 2, "empty": 2}  # Simulate a previously failing state
+    
+    msg, msgs, status = _chat_with_retries(
+        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
+    )
+    
+    assert status == "success"
+    assert error_state["errors"] == 0
+    assert error_state["empty"] == 0
+    assert msg.content == "Valid output"
+    mock_compact.assert_not_called()
+
+@patch(f"{run_agent_loop.__module__}._compact_history")
+def test_chat_with_retries_api_error_retry(mock_compact):
+    """Verifies an API crash triggers a retry and context compaction."""
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("Timeout")
+    error_state = {"errors": 0, "empty": 0}
+    mock_compact.return_value = [{"role": "system", "content": "compacted"}]
+    
+    msg, msgs, status = _chat_with_retries(
+        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
+    )
+    
+    assert status == "retry"
+    assert error_state["errors"] == 1
+    assert msgs[0]["content"] == "compacted"
+    mock_compact.assert_called_once()
+
+def test_chat_with_retries_api_error_abort():
+    """Verifies that consecutive API crashes eventually abort the loop."""
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = Exception("Timeout")
+    error_state = {"errors": MAX_CONSECUTIVE_ERRORS - 1, "empty": 0}
+    mock_error_cb = MagicMock()
+    
+    msg, msgs, status = _chat_with_retries(
+        mock_client, "model", [], [], "sys", error_state, MagicMock(), mock_error_cb
+    )
+    
+    assert status == "abort"
+    assert error_state["errors"] == MAX_CONSECUTIVE_ERRORS
+    mock_error_cb.assert_called_once()
+
+@patch(f"{run_agent_loop.__module__}._compact_history")
+def test_chat_with_retries_empty_retry(mock_compact):
+    """Verifies an empty LLM response triggers a retry and context compaction."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(content="", tool_calls=[])
+    error_state = {"errors": 0, "empty": 0}
+    mock_compact.return_value = [{"role": "system", "content": "compacted"}]
+    
+    msg, msgs, status = _chat_with_retries(
+        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
+    )
+    
+    assert status == "retry"
+    assert error_state["empty"] == 1
+    assert msgs[0]["content"] == "compacted"
+    mock_compact.assert_called_once()
+
+def test_chat_with_retries_empty_abort():
+    """Verifies that consecutive empty responses eventually abort the loop."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(content="", tool_calls=[])
+    error_state = {"errors": 0, "empty": MAX_CONSECUTIVE_EMPTY - 1}
+    mock_warn_cb = MagicMock()
+    
+    msg, msgs, status = _chat_with_retries(
+        mock_client, "model", [], [], "sys", error_state, mock_warn_cb, MagicMock()
+    )
+    
+    assert status == "abort"
+    assert error_state["empty"] == MAX_CONSECUTIVE_EMPTY
+    # Should warn about empty completion, then warn about aborting
+    assert mock_warn_cb.call_count == 2
