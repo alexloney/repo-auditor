@@ -46,17 +46,34 @@ def execute_audit(target_dir: Path,
                   model: str, 
                   ollama_host: str, 
                   ledger_file: str, 
-                  report_file: str):
-    client = ollama.Client(host=f"http://{ollama_host}")
+                  report_file: str,
+                  extensions: list[str] | None = None,
+                  skip_dirs: list[str] | None = None):
+    client = ollama.Client(host=f"{ollama_host}")
+    ledger_path = Path(ledger_file).resolve()
 
-    # Obtain a list of all scanner plugins available in the system
-    available_scanners = get_available_scanners()
+    # Loop through scanners and 
+    for scanner_class in scanners_to_run:
+        scanner_instance = scanner_class(
+            client=client,
+            model=model,
+            target_dir=target_dir,
+            ledger_path=ledger_path,
+            extensions=extensions,
+            skip_dirs=skip_dirs,
+            on_progress=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
+            on_warning=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
+            on_error=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
+        )
+        scanner_instance.run()
 
-    # TODO: Implement loop and execute scanner
-
+    # Run verification on each finding
     # TODO: Implement verification
 
-    # TODO: Generate report
+    # TODO: Do I want to add additional validation and formatting?
+
+    # Run report generation on each finding
+    # TODO: Implement report generation
 
 
 

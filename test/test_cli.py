@@ -40,7 +40,7 @@ def test_parse_args_with_ollama():
 def test_parse_args_with_default_ollama():
     args = parse_args(["/fake/repo"])
     assert args.repo_path == "/fake/repo"
-    assert args.ollama == "localhost:11434"
+    assert args.ollama == "http://localhost:11434"
 
 def test_parse_args_with_ledger():
     args = parse_args(["/fake/repo", "--ledger", "custom-ledger"])
