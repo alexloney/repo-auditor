@@ -61,5 +61,8 @@ def main(args=None):
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
         extensions=parsed_args.extensions.split(",") if parsed_args.extensions else None,
-        skip_dirs=parsed_args.skip_dirs.split(",") if parsed_args.skip_dirs else None
+        skip_dirs=parsed_args.skip_dirs.split(",") if parsed_args.skip_dirs else None,
+        on_progress=lambda msg: print(f"{msg}"),
+        on_warning=lambda msg: print(f"{msg}"),
+        on_error=lambda msg: print(f"{msg}"),
     )

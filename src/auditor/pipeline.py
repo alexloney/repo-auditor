@@ -1,11 +1,16 @@
 import importlib
 import inspect
+import json
 import pkgutil
+from typing import Callable
 import ollama
 from pathlib import Path
 
 from auditor import scanners
 from auditor.scanners.base import BaseScanner
+from auditor.evaluator.dedupe import dedupe_findings
+from auditor.evaluator.critic import verify_findings  
+from auditor.evaluator.reporter import write_report
 
 def get_available_scanners() -> dict[str, type[BaseScanner]]:
     """Dynamically loads all BaseScanner subclasses from the scanners package.
@@ -48,9 +53,13 @@ def execute_audit(target_dir: Path,
                   ledger_file: str, 
                   report_file: str,
                   extensions: list[str] | None = None,
-                  skip_dirs: list[str] | None = None):
+                  skip_dirs: list[str] | None = None,
+                  on_progress: Callable[[str], None] = None,
+                  on_warning: Callable[[str], None] = None,
+                  on_error: Callable[[str], None] = None):
     client = ollama.Client(host=f"{ollama_host}")
     ledger_path = Path(ledger_file).resolve()
+    report_path = Path(report_file).resolve()
 
     # Loop through scanners and 
     for scanner_class in scanners_to_run:
@@ -61,19 +70,42 @@ def execute_audit(target_dir: Path,
             ledger_path=ledger_path,
             extensions=extensions,
             skip_dirs=skip_dirs,
-            on_progress=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
-            on_warning=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
-            on_error=lambda msg: print(f"  [{scanner_class.name}] " + msg),  # Replace with appropriate callback
+            on_progress=lambda msg: on_progress(f"  [{scanner_class.name}] " + msg) if on_progress else None,
+            on_warning=lambda msg: on_warning(f"  [{scanner_class.name}] " + msg) if on_warning else None,
+            on_error=lambda msg: on_error(f"  [{scanner_class.name}] " + msg) if on_error else None,
         )
         scanner_instance.run()
 
-    # Run verification on each finding
-    # TODO: Implement verification
+    if not ledger_path.exists():
+        on_progress("No findings ledger found. Skipping evaluation and report generation.")
+        return
 
-    # TODO: Do I want to add additional validation and formatting?
+    raw_findings = []
+    try:
+        with open(ledger_path, "r", encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    raw_findings.append(json.loads(line))
+                except json.JSONDecodeError:
+                    on_warning(f"Skipping malformed ledger entry at line {lineno}") if on_warning else None
+    except OSError as e:
+        on_error(f"Failed to read ledger: {e}")
+        return
 
-    # Run report generation on each finding
-    # TODO: Implement report generation
+    unique_findings = dedupe_findings(raw_findings)
+    on_progress(f"{len(unique_findings)} unique finding(s) before verification.") if on_progress else None
+    
+    if unique_findings:
+        verified_findings = verify_findings(client, target_dir, unique_findings, model)
+        on_progress(f"{len(verified_findings)} finding(s) survived critic pass.") if on_progress else None
+    else:
+        verified_findings = []
+        on_progress("No findings survived verification.") if on_progress else None
+
+    write_report(target_dir, verified_findings)
+    on_progress(f"Report written to {report_path}") if on_progress else None
 
 
 

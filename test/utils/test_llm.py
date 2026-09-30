@@ -10,7 +10,6 @@ from auditor.utils.llm import (
     OUTPUT_RESERVE
 )
 
-# --- 1. Math and Token Tests ---
 def test_estimate_tokens():
     # Verify tiktoken is correctly encoding and returning a positive integer
     assert estimate_tokens("def hello(): pass") > 0
@@ -18,7 +17,6 @@ def test_estimate_tokens():
 def test_input_budget():
     assert input_budget() == MAX_CONTEXT - OUTPUT_RESERVE
 
-# --- 2. String Manipulation Tests ---
 def test_strip_json_fence():
     raw_json = '{"issue": "memory leak"}'
     
@@ -32,8 +30,6 @@ def test_strip_json_fence():
     # Markdown fence with trailing whitespace
     fenced_spaces = f"```\n{raw_json}\n```   "
     assert _strip_json_fence(fenced_spaces) == raw_json
-
-# --- 3. LLM API Execution Tests ---
 
 # Patch sleep globally for this test class/file so we don't delay the test suite
 @patch("auditor.utils.llm.time.sleep")
