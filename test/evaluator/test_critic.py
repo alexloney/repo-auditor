@@ -56,7 +56,7 @@ def test_verify_findings_keeps_genuine_bug(critic_setup):
     assert results[0]["severity"] == "critical"  # Adjusted by the critic
     assert results[0]["reviewer_notes"] == "Confirmed leak"
     
-    callbacks["on_progress"].assert_any_call("  [Evaluator] - Kept: Confirmed leak")
+    callbacks["on_progress"].assert_any_call(" - Kept: Confirmed leak")
 
 def test_verify_findings_rejects_false_positive(critic_setup):
     tmp_path, callbacks = critic_setup
@@ -74,7 +74,7 @@ def test_verify_findings_rejects_false_positive(critic_setup):
     
     # The finding should be dropped entirely
     assert len(results) == 0
-    callbacks["on_progress"].assert_any_call("  [Evaluator] - Rejected: Hallucinated import")
+    callbacks["on_progress"].assert_any_call(" - Rejected: Hallucinated import")
 
 # --- 2. Multi-Turn / Tool Interaction Tests ---
 

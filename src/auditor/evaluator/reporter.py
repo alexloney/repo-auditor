@@ -32,9 +32,8 @@ def write_report(target_dir: Path, findings: list) -> None:
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
             vuln = f" · **Class:** {f.get('vuln_class')}" if f.get("vuln_class") else ""
             
-            # Clean up nested markdown ticks
-            fix = f.get('suggested_solution', 'No fix provided.')
-            fix = fix.strip("`").strip() if fix.startswith("```") else fix
+            # Remove the stripping logic, just ensure it isn't empty
+            fix = f.get('suggested_solution', 'No fix provided.').strip()
 
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"
@@ -42,7 +41,8 @@ def write_report(target_dir: Path, findings: list) -> None:
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{repro}{notes}\n"
-                f"**Suggested solution**\n```\n{fix}\n```\n\n"
+                # Output the LLM's string exactly as-is without wrapping it in your own ticks
+                f"**Suggested solution**\n{fix}\n\n"
             )
 
     with open(report_path, "w", encoding="utf-8") as f:

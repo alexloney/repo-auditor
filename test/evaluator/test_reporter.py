@@ -78,21 +78,21 @@ def test_write_report_optional_fields(tmp_path):
     assert "**Steps to reproduce**\nInject <script>" in content
     assert "> **Reviewer Notes:** Confirmed in staging." in content
 
-def test_write_report_strips_nested_markdown_ticks(tmp_path):
-    """Verifies the reporter prevents broken markdown blocks if the LLM includes ``` in the solution."""
+def test_write_report_preserves_markdown_formatting(tmp_path):
+    """Verifies the reporter preserves the LLM's own markdown formatting in the solution."""
     findings = [
         {
-            "title": "Bad Fences",
+            "title": "Missing Guard",
             "severity": "medium",
             "file": "app.py",
-            # The LLM wraps the code in ```python ... ```, which would break the reporter's own ``` wrap.
-            "suggested_solution": "```python\ndef fixed(): pass\n```"
+            # The LLM generates its own markdown, which should pass through unaltered.
+            "suggested_solution": "Add a guard clause:\n```python\ndef fixed(): pass\n```"
         }
     ]
     
     write_report(tmp_path, findings)
     content = (tmp_path / "report.md").read_text(encoding="utf-8")
     
-    # The stripping logic should remove the backticks and trailing spaces, leaving only the inner code block
-    # wrapped safely inside the reporter's own template fences.
-    assert "```\npython\ndef fixed(): pass\n```" in content
+    # Verify the solution is rendered exactly as provided, ticks and all
+    expected_output = "**Suggested solution**\nAdd a guard clause:\n```python\ndef fixed(): pass\n```\n\n"
+    assert expected_output in content
