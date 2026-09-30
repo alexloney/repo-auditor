@@ -9,7 +9,7 @@ from auditor.agent.tools import (
     read_file,
     read_file_range,
     search_code,
-    report_issue,
+    make_report_issue_tool,
     submit_verdict
 )
 
@@ -118,10 +118,13 @@ def test_search_code_truncation(workspace):
 
 # --- 6. Ledger / Evaluation Tests ---
 
-def test_report_issue(workspace, monkeypatch):
+def test_report_issue(workspace):
     ledger_path = workspace / "test_ledger.json"
-    monkeypatch.setenv("AUDIT_LEDGER_PATH", str(ledger_path))
     
+    # 1. Initialize the tool using the factory
+    report_issue = make_report_issue_tool(ledger_path)
+    
+    # 2. Call the newly created function
     result = report_issue(
         filepath="app.py",
         line=10,
@@ -136,7 +139,7 @@ def test_report_issue(workspace, monkeypatch):
     
     data = json.loads(ledger_path.read_text(encoding="utf-8"))
     assert data["title"] == "SQLi"
-    assert data["file"] == "app.py"  # Verifying arguments were parsed
+    assert data["file"] == "app.py"
 
 def test_submit_verdict():
     # Simple static string return

@@ -116,39 +116,40 @@ def search_code(query: str, directory: str = ".") -> str:
     except Exception as e:
         return f"Error searching code: {str(e)}"
 
-def report_issue(
-    filepath: str,
-    line: int,
-    title: str,
-    description: str,
-    severity: str = "medium",
-    category: str = "bug",
-    suggested_solution: str = "",
-) -> str:
-    """
-    Logs a discovered bug, vulnerability, or bad practice into the ledger.
-    You must provide the filepath, the exact line number, a short title, a detailed
-    description, a severity ("critical", "high", "medium", or "low"), a category
-    (e.g. "bug", "security", "performance"), and a suggested fix.
-    """
-    # Fetch the ledger path from the environment; the scanner sets this before running.
-    ledger_path = os.environ.get("AUDIT_LEDGER_PATH", "audit_ledger.json")
+def make_report_issue_tool(ledger_path: Path):
+    def report_issue(
+        filepath: str,
+        line: int,
+        title: str,
+        description: str,
+        severity: str = "medium",
+        category: str = "bug",
+        suggested_solution: str = "",
+    ) -> str:
+        """
+        Logs a discovered bug, vulnerability, or bad practice into the ledger.
+        You must provide the filepath, the exact line number, a short title, a detailed
+        description, a severity ("critical", "high", "medium", or "low"), a category
+        (e.g. "bug", "security", "performance"), and a suggested fix.
+        """
 
-    try:
-        with open(ledger_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({
-                "file": filepath,
-                "line": line,
-                "title": title,
-                "description": description,
-                "severity": severity,
-                "confidence": "high",
-                "category": category,
-                "suggested_solution": suggested_solution,
-            }) + '\n')
-        return "Issue successfully logged to the ledger."
-    except Exception as e:
-        return f"Error logging issue: {str(e)}"
+        try:
+            with open(ledger_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "file": filepath,
+                    "line": line,
+                    "title": title,
+                    "description": description,
+                    "severity": severity,
+                    "confidence": "high",
+                    "category": category,
+                    "suggested_solution": suggested_solution,
+                }) + '\n')
+            return "Issue successfully logged to the ledger."
+        except Exception as e:
+            return f"Error logging issue: {str(e)}"
+    return report_issue
+
 
 def submit_verdict(is_genuine_bug: bool, reasoning: str, adjusted_severity: str) -> str:
     """
