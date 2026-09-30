@@ -1,7 +1,6 @@
 from .base import BaseScanner
-from .agent_loop import run_agent_loop
-from .common import MODEL
-from agent.tools import list_files, read_file, read_file_range, search_code, report_issue
+from ..agent.agent import run_agent_loop
+from ..agent.tools import list_files, read_file, read_file_range, search_code, make_report_issue_tool
 
 # Updated to explicitly instruct the use of the report_issue tool
 SYSTEM_PROMPT = ("You are a meticulous senior software engineer exploring and auditing a repository. "
@@ -19,9 +18,10 @@ SYSTEM_PROMPT = ("You are a meticulous senior software engineer exploring and au
 class ShallowAgentScanner(BaseScanner):
     id = "shallow"
     name = "Shallow Agentic Scan"
-    model = MODEL
 
     def run(self) -> None:
+        report_issue = make_report_issue_tool(self.ledger_path)
+
         run_agent_loop(
             client=self.client,
             model=self.model,
@@ -30,5 +30,7 @@ class ShallowAgentScanner(BaseScanner):
             system_prompt=SYSTEM_PROMPT,
             initial_user_prompt="Begin the audit. Please list the files in the current directory.",
             tools=[list_files, read_file, read_file_range, search_code, report_issue],
-            label="Shallow Scan",
+            on_progress=self.on_progress,
+            on_warning=self.on_warning,
+            on_error=self.on_error,
         )

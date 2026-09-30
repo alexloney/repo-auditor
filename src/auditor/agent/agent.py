@@ -1,30 +1,21 @@
-"""Reusable tool-calling agent loop shared by the agentic ("pull model") scanners."""
 import os
 from pathlib import Path
+from typing import Callable
+from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens
 
-from .common import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens
 
-# Compact history once the conversation gets this close to the usable input window.
-# Beyond it Ollama silently discards the oldest tokens, which drops the system and
-# initial user turns and makes the server reject the request with
-# "no user query found in messages".
 CONTEXT_SAFETY_MARGIN = 0.6
 MAX_HISTORY_MESSAGES = 200
-# An exhausted or finished agent emits empty completions; give it a couple of
-# chances to recover after a compaction before concluding the scan.
 MAX_CONSECUTIVE_EMPTY = 3
 MAX_CONSECUTIVE_ERRORS = 3
 
-
 def _compaction_threshold() -> float:
     return (MAX_CONTEXT - OUTPUT_RESERVE) * CONTEXT_SAFETY_MARGIN
-
 
 def _message_parts(m):
     if isinstance(m, dict):
         return m.get("role", ""), (m.get("content") or ""), (m.get("tool_calls") or [])
     return getattr(m, "role", ""), (getattr(m, "content", "") or ""), (getattr(m, "tool_calls", None) or [])
-
 
 def _conversation_tokens(messages) -> int:
     total = 0
@@ -36,7 +27,6 @@ def _conversation_tokens(messages) -> int:
             total += estimate_tokens(str(call))
     return total
 
-
 def _history_digest(messages, max_entries: int = 120) -> str:
     """Condenses the conversation into a short action log of tool calls and agent notes."""
     lines = []
@@ -47,7 +37,6 @@ def _history_digest(messages, max_entries: int = 120) -> str:
         if role == "assistant" and content.strip() and not calls:
             lines.append(f"- noted: {content.strip()[:200]}")
     return "\n".join(lines[-max_entries:])
-
 
 def _compact_history(client, model: str, system_prompt: str, messages: list) -> list:
     """Summarizes progress from a small digest, then rebuilds a short history around it.
@@ -92,7 +81,6 @@ def _compact_history(client, model: str, system_prompt: str, messages: list) -> 
         {"role": "user", "content": continuation},
     ]
 
-
 def run_agent_loop(
     client,
     model: str,
@@ -101,15 +89,15 @@ def run_agent_loop(
     system_prompt: str,
     initial_user_prompt: str,
     tools: list,
-    label: str,
     stop_token: str = "AUDIT_COMPLETE",
     max_turns: int = 50,
+    on_progress: Callable[[str], None] = None,
+    on_warning: Callable[[str], None] = None,
+    on_error: Callable[[str], None] = None
 ) -> None:
     """Drives a tool-calling agent against target_dir until it emits stop_token or runs out of turns."""
     original_dir = os.getcwd()
     os.chdir(target_dir)
-    # report_issue reads this env var to know where to append findings.
-    os.environ["AUDIT_LEDGER_PATH"] = str(ledger_path)
 
     messages = [
         {"role": "system", "content": system_prompt},
@@ -117,7 +105,7 @@ def run_agent_loop(
     ]
     available_tools = {t.__name__: t for t in tools}
 
-    print(f"  [{label}] Booting agent loop with {model}...")
+    on_progress(f"Booting agent loop with {model}...")
 
     try:
         consecutive_empty = 0
@@ -140,9 +128,9 @@ def run_agent_loop(
                 )
             except Exception as e:
                 consecutive_errors += 1
-                print(f"  [{label}] Chat request failed ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}")
+                on_warning(f"Chat request failed ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}")
                 if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    print(f"  [{label}] Giving up on this scan; findings so far are already saved.")
+                    on_error(f"Giving up on this scan; findings so far are already saved.")
                     break
                 # Usually the prompt overran num_ctx, so shrink it and try again.
                 messages = _compact_history(client, model, system_prompt, messages)
@@ -157,16 +145,16 @@ def run_agent_loop(
                 if not content:
                     consecutive_empty += 1
                     reason = getattr(response, "done_reason", "unknown")
-                    print(f"  [{label}] Empty completion ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY}, done_reason={reason})")
+                    on_warning(f"Empty completion ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY}, done_reason={reason})")
                     if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
-                        print(f"  [{label}] Agent stopped producing output; ending scan.")
+                        on_warning(f"Agent stopped producing output; ending scan.")
                         break
                     # Most often the context is exhausted, so reclaim room and retry.
                     messages = _compact_history(client, model, system_prompt, messages)
                     continue
 
                 consecutive_empty = 0
-                print(f"  Agent: {content}")
+                on_progress(f"Agent: {content}")
                 if stop_token in content:
                     break
                 messages.append(msg)
@@ -184,7 +172,7 @@ def run_agent_loop(
                 func_name = call.function.name
                 args = call.function.arguments
 
-                print(f"    > Executing: {func_name}({args})")
+                on_progress(f" > Executing: {func_name}({args})")
 
                 if func_name in available_tools:
                     try:
@@ -200,9 +188,9 @@ def run_agent_loop(
                     "name": func_name,
                 })
         else:
-            print(f"  [{label}] Reached the {max_turns}-turn limit; ending scan.")
+            on_warning(f"Reached the {max_turns}-turn limit; ending scan.")
 
     except KeyboardInterrupt:
-        print(f"\n  [{label}] Aborted by user.")
+        on_warning(f"Aborted by user.")
     finally:
         os.chdir(original_dir)

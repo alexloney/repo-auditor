@@ -2,19 +2,12 @@ import os
 import json
 from pathlib import Path
 
+from ..utils.llm import estimate_tokens
+
 # Keep a wide safety margin below the 66k context window so a single huge file
 # can't blow the whole conversation budget on its own.
 MAX_READ_TOKENS = 15000
 MAX_SEARCH_RESULTS = 100
-
-def _estimate_tokens(text: str) -> int:
-    try:
-        import tiktoken
-        enc = tiktoken.get_encoding("cl100k_base")
-        return len(enc.encode(text))
-    except Exception:
-        # Matches scanners.common.estimate_tokens; source code tokenizes denser than prose.
-        return max(1, len(text) // 3)
 
 # The agent's cwd is chdir'd to the target repo root before the tool loop starts.
 # All paths are resolved against that root and must not escape it, since the repo
@@ -47,7 +40,7 @@ def read_file(filepath: str) -> str:
         target = _resolve_within_root(filepath)
         with open(target, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
-        if _estimate_tokens(content) > MAX_READ_TOKENS:
+        if estimate_tokens(content) > MAX_READ_TOKENS:
             return "File too large to read entirely. Skip this file."
         return content
     except Exception as e:
@@ -72,7 +65,7 @@ def read_file_range(filepath: str, start_line: int, end_line: int) -> str:
 
         selected = [f"{i:4d} | {lines[i - 1]}" for i in range(start, end + 1)]
         snippet = "\n".join(selected)
-        if _estimate_tokens(snippet) > MAX_READ_TOKENS:
+        if estimate_tokens(snippet) > MAX_READ_TOKENS:
             return "Requested range is too large. Request a narrower line range."
         return snippet
     except Exception as e:
@@ -123,36 +116,48 @@ def search_code(query: str, directory: str = ".") -> str:
     except Exception as e:
         return f"Error searching code: {str(e)}"
 
-def report_issue(
-    filepath: str,
-    line: int,
-    title: str,
-    description: str,
-    severity: str = "medium",
-    category: str = "bug",
-    suggested_solution: str = "",
-) -> str:
-    """
-    Logs a discovered bug, vulnerability, or bad practice into the ledger.
-    You must provide the filepath, the exact line number, a short title, a detailed
-    description, a severity ("critical", "high", "medium", or "low"), a category
-    (e.g. "bug", "security", "performance"), and a suggested fix.
-    """
-    # Fetch the ledger path from the environment; the scanner sets this before running.
-    ledger_path = os.environ.get("AUDIT_LEDGER_PATH", "audit_ledger.json")
+def make_report_issue_tool(ledger_path: Path):
+    def report_issue(
+        filepath: str,
+        line: int,
+        title: str,
+        description: str,
+        severity: str = "medium",
+        category: str = "bug",
+        suggested_solution: str = "",
+    ) -> str:
+        """
+        Logs a discovered bug, vulnerability, or bad practice into the ledger.
+        You must provide the filepath, the exact line number, a short title, a detailed
+        description, a severity ("critical", "high", "medium", or "low"), a category
+        (e.g. "bug", "security", "performance"), and a suggested fix.
+        """
 
-    try:
-        with open(ledger_path, 'a', encoding='utf-8') as f:
-            f.write(json.dumps({
-                "file": filepath,
-                "line": line,
-                "title": title,
-                "description": description,
-                "severity": severity,
-                "confidence": "high",
-                "category": category,
-                "suggested_solution": suggested_solution,
-            }) + '\n')
-        return "Issue successfully logged to the ledger."
-    except Exception as e:
-        return f"Error logging issue: {str(e)}"
+        try:
+            with open(ledger_path, 'a', encoding='utf-8') as f:
+                f.write(json.dumps({
+                    "file": filepath,
+                    "line": line,
+                    "title": title,
+                    "description": description,
+                    "severity": severity,
+                    "confidence": "high",
+                    "category": category,
+                    "suggested_solution": suggested_solution,
+                }) + '\n')
+            return "Issue successfully logged to the ledger."
+        except Exception as e:
+            return f"Error logging issue: {str(e)}"
+    return report_issue
+
+
+def submit_verdict(is_genuine_bug: bool, reasoning: str, adjusted_severity: str) -> str:
+    """
+    Submits your final verdict on whether the reported bug is real.
+    You must call this tool to complete the evaluation of the current finding.
+    
+    :param is_genuine_bug: True if it is a real bug, False if it is a false positive.
+    :param reasoning: A concise explanation of why it was kept or rejected.
+    :param adjusted_severity: Must be "critical", "high", "medium", or "low".
+    """
+    return "Verdict received."
