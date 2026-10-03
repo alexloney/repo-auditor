@@ -7,7 +7,7 @@ from auditor.pipeline import execute_audit, get_available_scanners, filter_scann
 DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
 
 DEFAULT_SKIP_DIRS = {
-    "test", "tests", "testing", "spec", "__pycache__", ".venv", "venv",
+    "_test", "test_", "tests", "testing", "spec", "__pycache__", ".venv", "venv",
     "node_modules", "vendor", "third_party", "thirdparty", "generated",
     "build", "dist", "site-packages", ".git"
 }

@@ -3,6 +3,7 @@ import json
 from pathlib import Path
 
 from ..utils.llm import estimate_tokens
+from ..utils.filesystem import number_lines
 
 # Keep a wide safety margin below the 66k context window so a single huge file
 # can't blow the whole conversation budget on its own.
@@ -20,18 +21,6 @@ def _resolve_within_root(path_str: str) -> Path:
         raise ValueError(f"Path '{path_str}' escapes the repository root")
     return candidate
 
-def list_files(directory: str) -> str:
-    """
-    Lists all files and folders in the given directory. 
-    Use '.' to list the current directory.
-    """
-    try:
-        target = _resolve_within_root(directory)
-        items = os.listdir(target)
-        return json.dumps({"directory": directory, "contents": items})
-    except Exception as e:
-        return f"Error reading directory: {str(e)}"
-
 def read_file(filepath: str) -> str:
     """
     Reads the complete contents of a specific source code file.
@@ -40,9 +29,10 @@ def read_file(filepath: str) -> str:
         target = _resolve_within_root(filepath)
         with open(target, 'r', encoding='utf-8', errors='replace') as f:
             content = f.read()
-        if estimate_tokens(content) > MAX_READ_TOKENS:
+        numbered_content = number_lines(content)
+        if estimate_tokens(numbered_content) > MAX_READ_TOKENS:
             return "File too large to read entirely. Skip this file."
-        return content
+        return numbered_content
     except Exception as e:
         return f"Error reading file '{filepath}': {str(e)}"
 
@@ -71,50 +61,95 @@ def read_file_range(filepath: str, start_line: int, end_line: int) -> str:
     except Exception as e:
         return f"Error reading file '{filepath}': {str(e)}"
 
-def search_code(query: str, directory: str = ".") -> str:
-    """
-    Searches for a specific text string across all files in the directory.
-    Returns the file path, line number, and the matching line of code.
-    """
-    try:
-        target = _resolve_within_root(directory)
-        results = []
-        truncated = False
-        for root, dirs, files in os.walk(target):
-            # Skip hidden directories like .git (prune in-place so os.walk doesn't descend)
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
+def make_list_files_tool(extensions: list[str] | None, skip_dirs: list[str] | None):
+    skip_set = set(skip_dirs) if skip_dirs else set()
+    ext_set = set(extensions) if extensions else None
 
-            for file in files:
-                path = Path(root) / file
+    def list_files(directory: str) -> str:
+        """
+        Lists all files and folders in the given directory. 
+        Use '.' to list the current directory.
+        """
+        try:
+            target = _resolve_within_root(directory)
+            items = os.listdir(target)
+            filtered = []
+            
+            for item in items:
+                path = target / item
+                if path.is_dir():
+                    if item.startswith('.') or item in skip_set:
+                        continue
+                    # Appending a trailing slash helps the agent distinguish directories
+                    filtered.append(item + "/")
+                else:
+                    if ext_set is not None and path.suffix not in ext_set:
+                        continue
+                    filtered.append(item)
+                    
+            return json.dumps({"directory": directory, "contents": filtered})
+        except Exception as e:
+            return f"Error reading directory: {str(e)}"
+            
+    return list_files
 
-                # Skip binaries or large media
-                if path.suffix in ['.png', '.jpg', '.exe', '.dll', '.so']:
-                    continue
 
-                try:
-                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                        for i, line in enumerate(f):
-                            if query in line:
-                                rel_path = path.relative_to(Path.cwd().resolve())
-                                results.append(f"{rel_path}:{i+1}: {line.strip()[:300]}")
-                                if len(results) >= MAX_SEARCH_RESULTS:
-                                    truncated = True
-                                    break
-                except Exception:
-                    continue
+def make_search_code_tool(extensions: list[str] | None, skip_dirs: list[str] | None):
+    skip_set = set(skip_dirs) if skip_dirs else set()
+    ext_set = set(extensions) if extensions else None
 
+    def search_code(query: str, directory: str = ".") -> str:
+        """
+        Searches for a specific text string across all files in the directory.
+        Returns the file path, line number, and the matching line of code.
+        """
+        try:
+            target = _resolve_within_root(directory)
+            results = []
+            truncated = False
+            
+            for root, dirs, files in os.walk(target):
+                # Prune hidden directories and user-defined skip directories in-place
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in skip_set]
+
+                for file in files:
+                    path = Path(root) / file
+
+                    # Apply extension filtering
+                    if ext_set is not None and path.suffix not in ext_set:
+                        continue
+                        
+                    # Fallback binary filter
+                    if path.suffix in ['.png', '.jpg', '.exe', '.dll', '.so']:
+                        continue
+
+                    try:
+                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                            for i, line in enumerate(f):
+                                if query in line:
+                                    rel_path = path.relative_to(Path.cwd().resolve())
+                                    results.append(f"{rel_path}:{i+1}: {line.strip()[:300]}")
+                                    if len(results) >= MAX_SEARCH_RESULTS:
+                                        truncated = True
+                                        break
+                    except Exception:
+                        continue
+
+                    if truncated:
+                        break
                 if truncated:
                     break
-            if truncated:
-                break
 
-        if not results:
-            return f"No matches found for '{query}'."
-        if truncated:
-            results.append(f"... results truncated at {MAX_SEARCH_RESULTS} matches. Use a more specific query.")
-        return "\n".join(results)
-    except Exception as e:
-        return f"Error searching code: {str(e)}"
+            if not results:
+                return f"No matches found for '{query}'."
+            if truncated:
+                results.append(f"... results truncated at {MAX_SEARCH_RESULTS} matches. Use a more specific query.")
+            return "\n".join(results)
+        except Exception as e:
+            return f"Error searching code: {str(e)}"
+            
+    return search_code
+
 
 def make_report_issue_tool(ledger_path: Path):
     def report_issue(
@@ -123,6 +158,7 @@ def make_report_issue_tool(ledger_path: Path):
         title: str,
         description: str,
         severity: str = "medium",
+        confidence: str = "high",
         category: str = "bug",
         suggested_solution: str = "",
     ) -> str:
@@ -141,7 +177,7 @@ def make_report_issue_tool(ledger_path: Path):
                     "title": title,
                     "description": description,
                     "severity": severity,
-                    "confidence": "high",
+                    "confidence": confidence,
                     "category": category,
                     "suggested_solution": suggested_solution,
                 }) + '\n')

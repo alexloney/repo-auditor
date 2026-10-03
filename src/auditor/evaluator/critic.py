@@ -4,7 +4,7 @@ from typing import Callable
 from pathlib import Path
 import ollama
 
-from ..agent.tools import read_file, search_code, submit_verdict
+from ..agent.tools import read_file, submit_verdict, make_search_code_tool
 
 CRITIC_SYSTEM_PROMPT = (
     "You are a strict, highly skeptical principal engineer reviewing automated static analysis findings. "
@@ -21,6 +21,8 @@ def verify_findings(client: ollama.Client,
                     model: str,
                     target_dir: Path, 
                     findings: list,
+                    extensions: list[str] | None = None,
+                    skip_dirs: list[str] | None = None,
                     on_progress: Callable[[str], None] = None,
                     on_warning: Callable[[str], None] = None,
                     on_error: Callable[[str], None] = None) -> list:
@@ -30,6 +32,8 @@ def verify_findings(client: ollama.Client,
     # Change working directory so tools.py correctly resolves relative paths
     original_dir = os.getcwd()
     os.chdir(target_dir)
+
+    search_code = make_search_code_tool(extensions or [], skip_dirs or [])
 
     tools = [read_file, search_code, submit_verdict]
     available_tools = {t.__name__: t for t in tools}

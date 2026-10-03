@@ -1,6 +1,6 @@
 from .base import BaseScanner
 from ..agent.agent import run_agent_loop
-from ..agent.tools import list_files, read_file, read_file_range, search_code, make_report_issue_tool
+from ..agent.tools import read_file, read_file_range, make_report_issue_tool, make_list_files_tool, make_search_code_tool
 
 # Updated to explicitly instruct the use of the report_issue tool
 SYSTEM_PROMPT = ("You are a meticulous senior software engineer exploring and auditing a repository. "
@@ -21,6 +21,8 @@ class ShallowAgentScanner(BaseScanner):
 
     def run(self) -> None:
         report_issue = make_report_issue_tool(self.ledger_path)
+        list_files = make_list_files_tool(self.extensions, self.skip_dirs)
+        search_code = make_search_code_tool(self.extensions, self.skip_dirs)
 
         run_agent_loop(
             client=self.client,
