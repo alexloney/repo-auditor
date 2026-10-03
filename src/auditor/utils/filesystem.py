@@ -10,42 +10,6 @@ MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", "100000"))
 TARGET_FILE_SIZE = int(os.getenv("TARGET_FILE_SIZE", "15000"))
 MAX_FILES_PER_REPO = int(os.getenv("MAX_FILES_PER_REPO", "256"))
 
-LANG_EXT = {
-    ".py": "Python",
-    ".c": "C",
-    ".h": "C/C++ header",
-    ".cpp": "C++",
-    ".cc": "C++",
-    ".cxx": "C++",
-    ".hpp": "C++ header",
-    ".hh": "C++ header",
-    ".js": "JavaScript",
-    ".jsx": "JavaScript (JSX)",
-    ".mjs": "JavaScript",
-    ".cjs": "JavaScript",
-    ".ts": "TypeScript",
-    ".tsx": "TypeScript (JSX)",
-    ".vue": "Vue",
-    ".php": "PHP",
-    ".java": "Java",
-    ".kt": "Kotlin",
-    ".kts": "Kotlin",
-    ".go": "Go",
-    ".rs": "Rust",
-    ".rb": "Ruby",
-    ".cs": "C#",
-    ".swift": "Swift",
-    ".m": "Objective-C",
-    ".mm": "Objective-C++",
-    ".scala": "Scala",
-    ".pl": "Perl",
-    ".pm": "Perl",
-    ".sh": "Shell",
-    ".bash": "Shell",
-    ".lua": "Lua",
-    ".dart": "Dart",
-}
-
 SKIP_DIRS = {
     "test", "tests", "testing", "spec", "__pycache__", ".venv", "venv",
     "node_modules", "vendor", "third_party", "thirdparty", "generated",
@@ -77,10 +41,12 @@ def is_auditable(relpath: str, extensions: set | dict | None = None) -> bool:
         return False
 
     ext = os.path.splitext(filename)[1]
+
+    # If no specific extensions are provided, consider all files auditable
+    if extensions is None:
+        return True
     
-    # 3. Fall back to the global LANG_EXT dictionary if nothing was passed
-    allowed = LANG_EXT if extensions is None else extensions
-    return ext in allowed
+    return ext in extensions
 
 
 # 4. Add the extensions parameter here as well so they can be passed through

@@ -18,22 +18,22 @@ def test_number_lines():
     assert "   2 |     print('world')" in result
 
 def test_is_auditable_valid():
-    assert is_auditable("src/main.py") is True
-    assert is_auditable("src/utils/math.cpp") is True
+    assert is_auditable("src/main.py", extensions={".py"}) is True
+    assert is_auditable("src/utils/math.cpp", extensions={".cpp"}) is True
 
 def test_is_auditable_skipped_directories():
-    assert is_auditable(".venv/lib/main.py") is False
-    assert is_auditable("node_modules/package/index.js") is False
-    assert is_auditable(".git/config") is False
+    assert is_auditable(".venv/lib/main.py", extensions={".py"}) is False
+    assert is_auditable("node_modules/package/index.js", extensions={".js"}) is False
+    assert is_auditable(".git/config", extensions={".config"}) is False
 
 def test_is_auditable_skipped_files():
     # Tests matching the SKIP_FILES set
-    assert is_auditable("src/test_main.py") is False
-    assert is_auditable("src/app.min.js") is False
+    assert is_auditable("src/test_main.py", extensions={".py"}) is False
+    assert is_auditable("src/app.min.js", extensions={".js"}) is False
 
 def test_is_auditable_custom_extensions():
     # Should fail default checks
-    assert is_auditable("src/style.css") is False
+    assert is_auditable("src/style.css", extensions={".py"}) is False
     # Should pass when explicitly allowed
     assert is_auditable("src/style.css", extensions={".css"}) is True
 

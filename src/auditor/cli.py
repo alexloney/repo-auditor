@@ -4,6 +4,8 @@ import sys
 from pathlib import Path
 from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners
 
+DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
+
 def parse_args(args=None):
     parser = argparse.ArgumentParser(description="Audit a code repository.")
     parser.add_argument("repo_path", nargs="?", help="Target repository directory")
@@ -13,7 +15,7 @@ def parse_args(args=None):
     parser.add_argument("--ollama", type=str, help="Specify the Ollama host to use for scanning. Default: localhost:11434", default="http://localhost:11434")
     parser.add_argument("--ledger", type=str, help="Specify the ledger file to use for scanning. Default: ledger.json", default="findings.json")
     parser.add_argument("--report", type=str, help="Specify the report file to use for scanning. Default: report.json", default="report.md")
-    parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit. Default: all supported extensions.", default=None)
+    parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit. Default: all supported extensions.", default=",".join(DEFAULT_EXTENSION))
     parser.add_argument("--skip-dirs", type=str, help="Comma-separated list of directories to skip during the audit.", default=None)
     
     parsed = parser.parse_args(args)
@@ -21,6 +23,9 @@ def parse_args(args=None):
     if not parsed.repo_path and not parsed.list:
         parser.print_help()
         sys.exit(1)
+
+    if parsed.extensions:
+        parsed.extensions = [ext.strip() for ext in parsed.extensions.split(",")]
 
     return parsed
 
@@ -62,7 +67,7 @@ def main(args=None):
         ollama_host=parsed_args.ollama,
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
-        extensions=parsed_args.extensions.split(",") if parsed_args.extensions else None,
+        extensions=parsed_args.extensions if parsed_args.extensions else None,
         skip_dirs=parsed_args.skip_dirs.split(",") if parsed_args.skip_dirs else None,
         on_progress=lambda msg: print(f"{msg}"),
         on_warning=lambda msg: print(f"{msg}"),
