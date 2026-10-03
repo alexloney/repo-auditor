@@ -110,5 +110,5 @@ def execute_audit(target_dir: Path,
         verified_findings = []
         on_progress("No findings survived verification.") if on_progress else None
 
-    write_report(target_dir, verified_findings)
+    write_report(target_dir, report_path, verified_findings)
     on_progress(f"Report written to {report_path}") if on_progress else None
