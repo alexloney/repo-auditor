@@ -61,7 +61,7 @@ class SingleFileScanner(BaseScanner):
     def run(self) -> None:
 
         # Obtain a list of all files that we can scan
-        files = list_auditable_files(self.target_dir, self.skip_dirs, self.extensions)
+        files = list_auditable_files(self.target_dir, self.extensions, self.skip_dirs)
         self.on_progress(f"{len(files)} audit-eligible file(s) selected")
 
         # Loop through all files that we can scan

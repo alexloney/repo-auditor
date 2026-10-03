@@ -27,13 +27,13 @@ def number_lines(content: str) -> str:
     return "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(content.splitlines()))
 
 
-def is_auditable(relpath: str, extensions: set | dict | None = None) -> bool:
+def is_auditable(relpath: str, extensions: set | dict | None = None, skip_dirs: set | dict | None = None) -> bool:
     """
     Determines if a file is auditable based on its path and extension.
     """
     parts = relpath.replace("\\", "/").lower().split("/")
 
-    if any(p in SKIP_DIRS for p in parts[:-1]):
+    if skip_dirs is not None and any(p in skip_dirs for p in parts[:-1]):
         return False
 
     filename = parts[-1]
@@ -50,12 +50,15 @@ def is_auditable(relpath: str, extensions: set | dict | None = None) -> bool:
 
 
 # 4. Add the extensions parameter here as well so they can be passed through
-def list_auditable_files(target_dir: Path, skip_dirs: set | None = None, extensions: set | dict | None = None) -> list[str]:
+def list_auditable_files(target_dir: Path, extensions: set | dict | None = None, skip_dirs: set | None = None) -> list[str]:
     """Walks target_dir and returns a list of relative paths."""
     
-    directories_to_skip = set(SKIP_DIRS)
+    directories_to_skip = set()
     if skip_dirs is not None:
         directories_to_skip.update(skip_dirs)
+
+    if extensions is None:
+        extensions = set()
 
     found = []
     
@@ -68,7 +71,7 @@ def list_auditable_files(target_dir: Path, skip_dirs: set | None = None, extensi
             rel = str(full.relative_to(target_dir))
             
             # Now 'extensions' is defined and safely passes None or the custom set
-            if not is_auditable(rel, extensions):
+            if not is_auditable(rel, extensions, skip_dirs):
                 continue
 
             try:

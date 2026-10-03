@@ -22,9 +22,9 @@ def test_is_auditable_valid():
     assert is_auditable("src/utils/math.cpp", extensions={".cpp"}) is True
 
 def test_is_auditable_skipped_directories():
-    assert is_auditable(".venv/lib/main.py", extensions={".py"}) is False
-    assert is_auditable("node_modules/package/index.js", extensions={".js"}) is False
-    assert is_auditable(".git/config", extensions={".config"}) is False
+    assert is_auditable(".venv/lib/main.py", extensions={".py"}, skip_dirs={".venv"}) is False
+    assert is_auditable("node_modules/package/index.js", extensions={".js"}, skip_dirs={"node_modules"}) is False
+    assert is_auditable(".git/config", extensions={".config"}, skip_dirs={".git"}) is False
 
 def test_is_auditable_skipped_files():
     # Tests matching the SKIP_FILES set
@@ -54,7 +54,7 @@ def test_list_auditable_files(tmp_path):
     # Write a file strictly larger than the MAX_FILE_SIZE_BYTES limit
     large_file.write_bytes(b"0" * (MAX_FILE_SIZE_BYTES + 1))
     
-    results = list_auditable_files(tmp_path)
+    results = list_auditable_files(tmp_path, extensions={".py"}, skip_dirs={".venv"})
     
     # Extract just the filenames to safely assert across OS separators (\ vs /)
     filenames = [Path(p).name for p in results]
@@ -74,9 +74,9 @@ def test_list_auditable_files_with_custom_args(tmp_path):
     (tmp_path / "style.css").write_text("body {}")
     
     results = list_auditable_files(
-        tmp_path, 
-        skip_dirs={"ignore_me"}, 
-        extensions={".css"}
+        tmp_path,
+        extensions={".css"},
+        skip_dirs={"ignore_me"}
     )
     filenames = [Path(p).name for p in results]
     
