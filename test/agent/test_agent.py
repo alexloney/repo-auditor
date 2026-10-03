@@ -3,9 +3,7 @@ from unittest.mock import MagicMock, patch
 from pathlib import Path
 
 from auditor.agent.agent import (
-    _message_parts,
-    _history_digest,
-    _compact_history,
+    ConversationContext,
     _execute_tools,
     _chat_with_retries,
     run_agent_loop,
@@ -54,50 +52,59 @@ def agent_setup(tmp_path):
         
     return tmp_path, callbacks, [dummy_tool], MagicMock()
 
-# --- 2. History & Token Management Tests ---
+@pytest.fixture
+def mock_ctx():
+    """Provides a mocked ConversationContext for testing isolated functions."""
+    ctx = MagicMock(spec=ConversationContext)
+    ctx.client = MagicMock()
+    ctx.model = "test-model"
+    ctx.get_payload.return_value = [{"role": "system", "content": "sys"}]
+    return ctx
 
-def test_message_parts():
-    """Ensures it extracts data correctly from both dicts and objects."""
-    # Dict format
-    dict_msg = {"role": "user", "content": "hello", "tool_calls": []}
-    role, content, calls = _message_parts(dict_msg)
-    assert role == "user" and content == "hello" and calls == []
+# --- 2. ConversationContext Tests ---
 
-    # Object format
-    obj_msg = MagicMock(role="assistant", content="world", tool_calls=[])
-    role, content, calls = _message_parts(obj_msg)
-    assert role == "assistant" and content == "world"
-
-def test_history_digest():
-    """Verifies that the raw message list is condensed into a readable bulleted log."""
-    messages = [
-        {"role": "user", "content": "Do a thing."},
-        MagicMock(role="assistant", content="Thinking...", tool_calls=[]),
-        MagicMock(role="assistant", content="", tool_calls=[make_mock_call("read_file", {"filepath": "app.py"})]),
-    ]
+def test_context_initialization():
+    """Verifies the context sets up the initial system and user prompts."""
+    ctx = ConversationContext(MagicMock(), "model", "System Prompt", "User Prompt")
+    payload = ctx.get_payload()
     
-    digest = _history_digest(messages)
-    
-    assert "- noted: Thinking..." in digest
-    assert "read_file" in digest
-    assert "app.py" in digest
-    assert "Do a thing." not in digest  # User prompts are stripped from the action log
+    assert len(payload) == 2
+    assert payload[0] == {"role": "system", "content": "System Prompt"}
+    assert payload[1] == {"role": "user", "content": "User Prompt"}
 
-def test_compact_history_success():
-    """Verifies that the history compactor uses the LLM to generate a summary."""
+def test_context_append_and_extend():
+    """Verifies that new messages can be added to the history."""
+    ctx = ConversationContext(MagicMock(), "model", "sys", "user")
+    
+    ctx.append({"role": "assistant", "content": "Thinking..."})
+    assert len(ctx.get_payload()) == 3
+    
+    ctx.extend([{"role": "tool", "content": "Result"}])
+    assert len(ctx.get_payload()) == 4
+
+def test_context_token_estimation():
+    """Verifies that token math evaluates properly without crashing."""
+    ctx = ConversationContext(MagicMock(), "model", "sys", "user")
+    ctx.append({"role": "assistant", "content": "A standard response.", "tool_calls": [make_mock_call("read", {"file": "a"})]})
+    
+    tokens = ctx.token_count
+    assert isinstance(tokens, int)
+    assert tokens > 0
+
+def test_context_compaction():
+    """Verifies that context successfully calls the LLM to summarize and resets its state."""
     mock_client = MagicMock()
-    mock_client.chat.return_value = make_mock_response(content="- Checked app.py\n- Needs more review.")
+    mock_client.chat.return_value = make_mock_response(content="- Reviewed auth.py")
     
-    messages = [
-        {"role": "user", "content": "Start"},
-        MagicMock(role="assistant", content="Noted", tool_calls=[])
-    ]
+    ctx = ConversationContext(mock_client, "model", "SYS", "USER")
+    ctx.append({"role": "assistant", "content": "Did some things."})
     
-    compacted = _compact_history(mock_client, "model", "SYS_PROMPT", messages)
+    ctx.compact()
     
-    assert len(compacted) == 2
-    assert compacted[0]["role"] == "system"
-    assert "Checked app.py" in compacted[1]["content"]
+    payload = ctx.get_payload()
+    assert len(payload) == 2
+    assert payload[0]["role"] == "system"
+    assert "Reviewed auth.py" in payload[1]["content"]
 
 # --- 3. Agent Execution Loop Tests ---
 
@@ -109,7 +116,6 @@ def test_run_agent_loop_immediate_stop(agent_setup):
     
     run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
     
-    # Executed exactly 1 turn
     assert mock_client.chat.call_count == 1
     callbacks["on_progress"].assert_any_call("Agent: Nothing to do. AUDIT_COMPLETE")
 
@@ -117,7 +123,6 @@ def test_run_agent_loop_tool_execution(agent_setup):
     """Verifies the agent loops, executes a tool, captures the output, and then stops."""
     tmp_path, callbacks, tools, mock_client = agent_setup
 
-    # Pass a dict instead of a raw JSON string
     mock_client.chat.side_effect = [
         make_mock_response(tool_calls=[make_mock_call("dummy_tool", {"x": "test"})]),
         make_mock_response(content="Got it. AUDIT_COMPLETE")
@@ -128,7 +133,6 @@ def test_run_agent_loop_tool_execution(agent_setup):
     assert mock_client.chat.call_count == 2
     callbacks["on_progress"].assert_any_call(" > Executing: dummy_tool({'x': 'test'})")
 
-    # Check that the tool result was appended to the messages before the second call
     second_call_messages = mock_client.chat.call_args_list[1][1]["messages"]
     assert second_call_messages[-1]["role"] == "tool"
     assert second_call_messages[-1]["content"] == "Tool executed with test"
@@ -137,7 +141,6 @@ def test_run_agent_loop_max_turns(agent_setup):
     """Verifies the loop cuts off automatically if the agent gets stuck in a loop."""
     tmp_path, callbacks, tools, mock_client = agent_setup
     
-    # Always outputs conversational text without the stop token
     mock_client.chat.return_value = make_mock_response(content="Still looking...")
     
     run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, max_turns=3, **callbacks)
@@ -151,7 +154,6 @@ def test_run_agent_loop_api_crashes(agent_setup):
     """Verifies that consecutive API failures gracefully abort the scan."""
     tmp_path, callbacks, tools, mock_client = agent_setup
     
-    # The API throws exceptions repeatedly
     mock_client.chat.side_effect = Exception("Connection Refused")
     
     run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
@@ -159,27 +161,18 @@ def test_run_agent_loop_api_crashes(agent_setup):
     assert mock_client.chat.call_count == MAX_CONSECUTIVE_ERRORS
     callbacks["on_error"].assert_called_with("Giving up on this scan; findings so far are already saved.")
 
-@patch(f"{run_agent_loop.__module__}._compact_history")
+@patch("auditor.agent.agent.ConversationContext.compact")
 def test_run_agent_loop_empty_completions(mock_compact, agent_setup):
     """Verifies that empty completions trigger history compaction and eventually abort if unrecoverable."""
     tmp_path, callbacks, tools, mock_client = agent_setup
     
-    # The model repeatedly returns empty strings (e.g., done_reason=length)
     mock_client.chat.return_value = make_mock_response(content="", done_reason="length")
-    
-    # Mock the compactor so it doesn't try to make its own LLM calls during the failure loop
-    mock_compact.return_value = [{"role": "system", "content": "sys"}]
     
     run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
     
-    # The chat API is called exactly 3 times before giving up
     assert mock_client.chat.call_count == MAX_CONSECUTIVE_EMPTY
     callbacks["on_warning"].assert_called_with("Agent stopped producing output; ending scan.")
-    
-    # The compactor is called to recover from the 1st and 2nd failures, but skipped on the final fatal 3rd failure
     assert mock_compact.call_count == MAX_CONSECUTIVE_EMPTY - 1
-
-
 
 # --- 5. Extracted Helper Tests ---
 
@@ -221,84 +214,61 @@ def test_execute_tools_not_found():
     
     assert "Error: Tool fake_tool not found" in results[0]["content"]
 
-@patch(f"{run_agent_loop.__module__}._compact_history")
-def test_chat_with_retries_success(mock_compact):
+def test_chat_with_retries_success(mock_ctx):
     """Verifies a successful chat call returns 'success' and resets error tracking."""
-    mock_client = MagicMock()
-    mock_client.chat.return_value = make_mock_response(content="Valid output")
-    error_state = {"errors": 2, "empty": 2}  # Simulate a previously failing state
+    mock_ctx.client.chat.return_value = make_mock_response(content="Valid output")
+    error_state = {"errors": 2, "empty": 2}
     
-    msg, msgs, status = _chat_with_retries(
-        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
-    )
+    msg, status = _chat_with_retries(mock_ctx, [], error_state, MagicMock(), MagicMock())
     
     assert status == "success"
     assert error_state["errors"] == 0
     assert error_state["empty"] == 0
     assert msg.content == "Valid output"
-    mock_compact.assert_not_called()
+    mock_ctx.compact.assert_not_called()
 
-@patch(f"{run_agent_loop.__module__}._compact_history")
-def test_chat_with_retries_api_error_retry(mock_compact):
+def test_chat_with_retries_api_error_retry(mock_ctx):
     """Verifies an API crash triggers a retry and context compaction."""
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = Exception("Timeout")
+    mock_ctx.client.chat.side_effect = Exception("Timeout")
     error_state = {"errors": 0, "empty": 0}
-    mock_compact.return_value = [{"role": "system", "content": "compacted"}]
     
-    msg, msgs, status = _chat_with_retries(
-        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
-    )
+    msg, status = _chat_with_retries(mock_ctx, [], error_state, MagicMock(), MagicMock())
     
     assert status == "retry"
     assert error_state["errors"] == 1
-    assert msgs[0]["content"] == "compacted"
-    mock_compact.assert_called_once()
+    mock_ctx.compact.assert_called_once()
 
-def test_chat_with_retries_api_error_abort():
+def test_chat_with_retries_api_error_abort(mock_ctx):
     """Verifies that consecutive API crashes eventually abort the loop."""
-    mock_client = MagicMock()
-    mock_client.chat.side_effect = Exception("Timeout")
+    mock_ctx.client.chat.side_effect = Exception("Timeout")
     error_state = {"errors": MAX_CONSECUTIVE_ERRORS - 1, "empty": 0}
     mock_error_cb = MagicMock()
     
-    msg, msgs, status = _chat_with_retries(
-        mock_client, "model", [], [], "sys", error_state, MagicMock(), mock_error_cb
-    )
+    msg, status = _chat_with_retries(mock_ctx, [], error_state, MagicMock(), mock_error_cb)
     
     assert status == "abort"
     assert error_state["errors"] == MAX_CONSECUTIVE_ERRORS
     mock_error_cb.assert_called_once()
 
-@patch(f"{run_agent_loop.__module__}._compact_history")
-def test_chat_with_retries_empty_retry(mock_compact):
+def test_chat_with_retries_empty_retry(mock_ctx):
     """Verifies an empty LLM response triggers a retry and context compaction."""
-    mock_client = MagicMock()
-    mock_client.chat.return_value = make_mock_response(content="", tool_calls=[])
+    mock_ctx.client.chat.return_value = make_mock_response(content="", tool_calls=[])
     error_state = {"errors": 0, "empty": 0}
-    mock_compact.return_value = [{"role": "system", "content": "compacted"}]
     
-    msg, msgs, status = _chat_with_retries(
-        mock_client, "model", [], [], "sys", error_state, MagicMock(), MagicMock()
-    )
+    msg, status = _chat_with_retries(mock_ctx, [], error_state, MagicMock(), MagicMock())
     
     assert status == "retry"
     assert error_state["empty"] == 1
-    assert msgs[0]["content"] == "compacted"
-    mock_compact.assert_called_once()
+    mock_ctx.compact.assert_called_once()
 
-def test_chat_with_retries_empty_abort():
+def test_chat_with_retries_empty_abort(mock_ctx):
     """Verifies that consecutive empty responses eventually abort the loop."""
-    mock_client = MagicMock()
-    mock_client.chat.return_value = make_mock_response(content="", tool_calls=[])
+    mock_ctx.client.chat.return_value = make_mock_response(content="", tool_calls=[])
     error_state = {"errors": 0, "empty": MAX_CONSECUTIVE_EMPTY - 1}
     mock_warn_cb = MagicMock()
     
-    msg, msgs, status = _chat_with_retries(
-        mock_client, "model", [], [], "sys", error_state, mock_warn_cb, MagicMock()
-    )
+    msg, status = _chat_with_retries(mock_ctx, [], error_state, mock_warn_cb, MagicMock())
     
     assert status == "abort"
     assert error_state["empty"] == MAX_CONSECUTIVE_EMPTY
-    # Should warn about empty completion, then warn about aborting
     assert mock_warn_cb.call_count == 2
