@@ -51,7 +51,7 @@ def test_single_file_scanner_success(mock_append, mock_call_json, mock_list_file
     mock_scanner.run()
     
     # 4. Assertions
-    mock_list_files.assert_called_once_with(mock_scanner.target_dir, mock_scanner.skip_dirs, mock_scanner.extensions)
+    mock_list_files.assert_called_once_with(mock_scanner.target_dir, mock_scanner.extensions, mock_scanner.skip_dirs)
     mock_call_json.assert_called_once()
     
     # Verify the finding was appended and the file path was injected correctly

@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 from auditor.agent.tools import (
     _resolve_within_root,
-    list_files,
+    make_list_files_tool,
     read_file,
     read_file_range,
-    search_code,
+    make_search_code_tool,
     make_report_issue_tool,
     submit_verdict
 )
@@ -42,15 +42,19 @@ def test_resolve_within_root(workspace):
 def test_list_files(workspace):
     (workspace / "file1.txt").touch()
     (workspace / "dir1").mkdir()
+
+    list_files = make_list_files_tool(extensions=None, skip_dirs=None)
     
     result = list_files(".")
     data = json.loads(result)
     
     assert data["directory"] == "."
     assert "file1.txt" in data["contents"]
-    assert "dir1" in data["contents"]
+    assert "dir1/" in data["contents"]
 
 def test_list_files_invalid(workspace):
+    list_files = make_list_files_tool(extensions=None, skip_dirs=None)
+
     result = list_files("missing_dir")
     assert "Error reading directory" in result
 
@@ -59,7 +63,7 @@ def test_read_file_success(mock_tokens, workspace):
     target = workspace / "app.py"
     target.write_text("print('hello')", encoding="utf-8")
     
-    assert read_file("app.py") == "print('hello')"
+    assert read_file("app.py") == "   1 | print('hello')"
 
 @patch("auditor.agent.tools.estimate_tokens", return_value=99999)
 def test_read_file_too_large(mock_tokens, workspace):
@@ -96,12 +100,16 @@ def test_search_code_success(workspace):
     (workspace / "app.py").write_text("def hello():\n    return True\n", encoding="utf-8")
     (workspace / "test.py").write_text("def test_hello():\n    pass\n", encoding="utf-8")
     
+    search_code = make_search_code_tool(extensions=None, skip_dirs=None)
+
     result = search_code("def hello")
     assert "app.py:1: def hello():" in result
     assert "test.py" not in result  # Doesn't match exactly
 
 def test_search_code_no_matches(workspace):
     (workspace / "app.py").write_text("def hello():\n    return True\n", encoding="utf-8")
+    search_code = make_search_code_tool(extensions=None, skip_dirs=None)
+
     assert "No matches found" in search_code("missing_function")
 
 @patch("auditor.agent.tools.MAX_SEARCH_RESULTS", 2)
@@ -109,6 +117,8 @@ def test_search_code_truncation(workspace):
     # Write 3 matches to force truncation
     (workspace / "app.py").write_text("match\nmatch\nmatch\n", encoding="utf-8")
     
+    search_code = make_search_code_tool(extensions=None, skip_dirs=None)
+
     result = search_code("match")
     lines = result.splitlines()
     

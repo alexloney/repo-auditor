@@ -61,6 +61,10 @@ def execute_audit(target_dir: Path,
     ledger_path = Path(ledger_file).resolve()
     report_path = Path(report_file).resolve()
 
+    on_progress_noop = lambda msg: on_progress(f"{msg}") if on_progress else None
+    on_warning_noop = lambda msg: on_warning(f"{msg}") if on_warning else None
+    on_error_noop = lambda msg: on_error(f"{msg}") if on_error else None
+
     # Loop through scanners and 
     for scanner_class in scanners_to_run:
         scanner_instance = scanner_class(
@@ -70,14 +74,14 @@ def execute_audit(target_dir: Path,
             ledger_path=ledger_path,
             extensions=extensions,
             skip_dirs=skip_dirs,
-            on_progress=lambda msg: on_progress(f"  [{scanner_class.name}] {msg}") if on_progress else None,
-            on_warning=lambda msg: on_warning(f"  [{scanner_class.name}] {msg}") if on_warning else None,
-            on_error=lambda msg: on_error(f"  [{scanner_class.name}] {msg}") if on_error else None,
+            on_progress=lambda msg: on_progress_noop(f"  [{scanner_class.name}] {msg}"),
+            on_warning=lambda msg: on_warning_noop(f"  [{scanner_class.name}] {msg}"),
+            on_error=lambda msg: on_error_noop(f"  [{scanner_class.name}] {msg}"),
         )
         scanner_instance.run()
 
     if not ledger_path.exists():
-        on_progress("No findings ledger found. Skipping evaluation and report generation.")
+        on_progress_noop("No findings ledger found. Skipping evaluation and report generation.")
         return
 
     raw_findings = []
@@ -89,26 +93,28 @@ def execute_audit(target_dir: Path,
                 try:
                     raw_findings.append(json.loads(line))
                 except json.JSONDecodeError:
-                    on_warning(f"Skipping malformed ledger entry at line {lineno}") if on_warning else None
+                    on_warning_noop(f"Skipping malformed ledger entry at line {lineno}") if on_warning else None
     except OSError as e:
-        on_error(f"Failed to read ledger: {e}")
+        on_error_noop(f"Failed to read ledger: {e}")
         return
 
     unique_findings = dedupe_findings(raw_findings)
-    on_progress(f"{len(unique_findings)} unique finding(s) before verification.") if on_progress else None
+    on_progress_noop(f"{len(unique_findings)} unique finding(s) before verification.")
     
     if unique_findings:
         verified_findings = verify_findings(client, 
                                             model, 
                                             target_dir, 
-                                            unique_findings, 
-                                            on_progress=lambda msg: on_progress(f"  [Critic] {msg}") if on_progress else None, 
-                                            on_warning=lambda msg: on_warning(f"  [Critic] {msg}") if on_warning else None, 
-                                            on_error=lambda msg: on_error(f"  [Critic] {msg}") if on_error else None)
-        on_progress(f"{len(verified_findings)} finding(s) survived critic pass.") if on_progress else None
+                                            unique_findings,
+                                            extensions,
+                                            skip_dirs,
+                                            on_progress=lambda msg: on_progress_noop(f"  [Critic] {msg}"), 
+                                            on_warning=lambda msg: on_warning_noop(f"  [Critic] {msg}"), 
+                                            on_error=lambda msg: on_error_noop(f"  [Critic] {msg}"))
+        on_progress_noop(f"{len(verified_findings)} finding(s) survived critic pass.")
     else:
         verified_findings = []
-        on_progress("No findings survived verification.") if on_progress else None
+        on_progress_noop("No findings survived verification.") 
 
-    write_report(target_dir, verified_findings)
-    on_progress(f"Report written to {report_path}") if on_progress else None
+    write_report(target_dir, report_path, verified_findings)
+    on_progress_noop(f"Report written to {report_path}")

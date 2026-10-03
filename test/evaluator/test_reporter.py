@@ -4,12 +4,12 @@ from auditor.evaluator.reporter import write_report
 
 def test_write_report_empty(tmp_path):
     """Verifies behavior when the evaluator prunes all findings."""
-    write_report(tmp_path, [])
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, [])
     
-    report_file = tmp_path / "report.md"
-    assert report_file.exists()
+    assert report_path.exists()
     
-    content = report_file.read_text(encoding="utf-8")
+    content = report_path.read_text(encoding="utf-8")
     assert "Static Audit Report" in content
     assert "**Findings:** 0 total" in content
     assert "No definitive PR-worthy bugs found." in content
@@ -37,9 +37,10 @@ def test_write_report_basic_findings(tmp_path):
         }
     ]
     
-    write_report(tmp_path, findings)
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, findings)
     
-    content = (tmp_path / "report.md").read_text(encoding="utf-8")
+    content = report_path.read_text(encoding="utf-8")
     
     # 1. Check severity counts in the header
     assert "**Findings:** 2 total" in content
@@ -70,8 +71,9 @@ def test_write_report_optional_fields(tmp_path):
         }
     ]
     
-    write_report(tmp_path, findings)
-    content = (tmp_path / "report.md").read_text(encoding="utf-8")
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, findings)
+    content = report_path.read_text(encoding="utf-8")
     
     assert "**OWASP:** A03:2021-Injection" in content
     assert "**Class:** cross-site-scripting" in content
@@ -90,8 +92,9 @@ def test_write_report_preserves_markdown_formatting(tmp_path):
         }
     ]
     
-    write_report(tmp_path, findings)
-    content = (tmp_path / "report.md").read_text(encoding="utf-8")
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, findings)
+    content = report_path.read_text(encoding="utf-8")
     
     # Verify the solution is rendered exactly as provided, ticks and all
     expected_output = "**Suggested solution**\nAdd a guard clause:\n```python\ndef fixed(): pass\n```\n\n"

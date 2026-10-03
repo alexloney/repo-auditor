@@ -3,9 +3,8 @@ from pathlib import Path
 from datetime import datetime
 import json
 
-def write_report(target_dir: Path, findings: list) -> None:
+def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
     """Formats verified findings into a Markdown file."""
-    report_path = target_dir / "report.md"
     
     sev_counts = {}
     for f_ in findings:
