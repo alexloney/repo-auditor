@@ -36,11 +36,12 @@ def list_scanners():
 
 def main(args=None):
     parsed_args = parse_args(args)
-    raw_target = parsed_args.repo_path[0] if isinstance(parsed_args.repo_path, list) else parsed_args.repo_path
-    target = Path(raw_target).resolve()
-
+    
     if parsed_args.list:
         return list_scanners()
+    
+    raw_target = parsed_args.repo_path[0] if isinstance(parsed_args.repo_path, list) else parsed_args.repo_path
+    target = Path(raw_target).resolve()
 
     registry = get_available_scanners()
     selected_scanners, skipped_ids = filter_scanners(parsed_args.scans, registry)
