@@ -1,14 +1,17 @@
 # repo-auditor
 
-An autonomous, plugin-based repository reviewer backed by a local [Ollama](https://ollama.com/) LLM.
+A plugin-based repository reviewer backed by a local [Ollama](https://ollama.com/) model.
 
-Point it at a checked-out repository and it will read the source, hunt for defects and
-vulnerabilities, aggressively prune false positives, and emit a Markdown report of findings
-worth reviewing and turning into merge requests.
+Point it at a checked-out repository and it reviews the source for bugs and security
+vulnerabilities, has a second "critic" pass prune false positives, and writes a Markdown report
+of the findings that survive.
 
 ```powershell
-python main.py C:\path\to\some-repo
+repo-auditor C:\path\to\some-repo
 ```
+
+Everything runs locally against your Ollama server. Nothing is executed, built or sent anywhere
+else.
 
 ---
 
@@ -23,47 +26,41 @@ python main.py C:\path\to\some-repo
 - [Writing a new scanner](#writing-a-new-scanner)
 - [Agent tools](#agent-tools)
 - [Project layout](#project-layout)
-- [Design notes and limitations](#design-notes-and-limitations)
+- [Development](#development)
+- [Limitations](#limitations)
 
 ---
 
 ## How it works
 
-The pipeline has two stages: **scan**, then **evaluate**.
-
 ```
-                 ┌──────────────────────────────────────┐
-  repo on disk → │  scanners/  (plugins, run in order)  │ → findings.json (JSONL ledger)
-                 └──────────────────────────────────────┘
-                                                              │
-                 ┌──────────────────────────────────────┐     │
-                 │  evaluator.py                        │ ←───┘
-                 │   dedupe → LLM critic → report       │ → report.md
-                 └──────────────────────────────────────┘
+                 ┌─────────────────────────────────────┐
+  repo on disk → │ scanners (plugins, run in sequence) │ → findings.json  (JSONL ledger)
+                 └─────────────────────────────────────┘          │
+                 ┌─────────────────────────────────────┐          │
+                 │ dedupe → critic (agentic) → report  │ ←────────┘
+                 └─────────────────────────────────────┘ → report.md
 ```
 
-1. **Scan.** Each selected scanner plugin analyses the repository and appends findings to a
-   shared append-only JSONL ledger (`findings.json`, written into the target repo).
-2. **Evaluate.** After all scanners finish, `evaluator.py` deduplicates the ledger, sends each
-   surviving finding back to the LLM as a hostile "critic" pass to prune hallucinations and
-   nitpicks, then writes a human-readable `report.md`.
+1. **Scan.** Each selected scanner analyses the repository and appends findings to a shared
+   JSON Lines ledger.
+2. **Dedupe.** Findings describing the same defect are merged (see [Deduplication](#deduplication)).
+3. **Critic.** Each remaining finding is handed to a skeptical agent that can read and search the
+   repository, and must submit a verdict: keep (optionally lowering the severity) or reject.
+4. **Report.** Surviving findings are written to a Markdown report, sorted by severity.
 
-The evaluation pass always runs, regardless of which scanners were selected.
+Scanners come in two styles:
 
-### Two scanner styles
-
-Scanners come in two flavours, and both are first-class:
-
-| Style | How it works | Best for |
+| Style | How it works | Good for |
 | --- | --- | --- |
-| **Push model** (structured output) | The driver code selects files, slices them into bounded chunks, and *pushes* each chunk to the LLM with a JSON schema. Deterministic coverage. | Systematic, exhaustive review where you want every file looked at. |
-| **Pull model** (agentic tool-calling) | The LLM is given tools (`list_files`, `search_code`, `read_file`, …) and *pulls* whatever context it decides it needs, in a loop. | Cross-file reasoning: tracing a variable backwards through call sites. |
+| **Per-file** (structured output) | Code selects each file and sends it to the model with a JSON schema. Every eligible file is reviewed. | Exhaustive, localized review. |
+| **Agentic** (tool calling) | The model gets tools (`list_files`, `read_file`, `search_code`, …) and decides what to read, in a loop. | Cross-file reasoning, such as checking that callers match a function's contract. |
 
 ---
 
 ## Installation
 
-Requires **Python 3.10+** (the code uses `X | None` type syntax) and a reachable Ollama server.
+Requires **Python 3.10+** and a reachable Ollama server.
 
 ```powershell
 git clone <this-repo>
@@ -72,406 +69,332 @@ cd repo-auditor
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 
-pip install ollama
-pip install tiktoken   # optional, see below
+pip install -e .
 ```
 
-**`tiktoken` is strongly recommended.** It is used for token estimation when packing prompts and
-when deciding if an agent's conversation needs compacting. Without it, every call site falls back
-to a deliberately pessimistic `len(text) // 3` heuristic. Source code tokenizes far denser than
-prose, and under-counting causes context overflow — which Ollama handles by silently discarding
-the oldest tokens, dropping the system and initial user turns and making the server reject the
-request with `no user query found in messages`. Installing `tiktoken` makes the budget maths
-accurate and avoids relying on the heuristic's safety margin.
+This installs the `repo-auditor` command. `python -m auditor` works too.
 
 ### Ollama
 
-The Ollama host is currently hardcoded in `main.py`:
+Pull or create the model you want to use and pass it with `--model` (default
+`qwen-coder-64k:latest`). If the server isn't at `http://localhost:11434`, pass `--ollama`.
 
-```python
-client = ollama.Client(host="http://192.168.86.5:11434")
-```
+The default context settings assume a model with a **64k context window**. For a smaller model,
+lower `MAX_CONTEXT` to match its real window (see [Configuration](#configuration)), otherwise
+Ollama silently truncates prompts.
 
-Change that line to point at your own server (e.g. `http://localhost:11434`). Then pull or
-create the model named by the `MODEL` environment variable (default `qwen-coder-64k:latest`):
-
-```powershell
-ollama pull qwen2.5-coder:32b
-$env:MODEL = "qwen2.5-coder:32b"
-```
-
-> The default model name implies a **64k context window**. If you point `MODEL` at a model with
-> a smaller real context, lower `MAX_CONTEXT` to match or you will get empty completions.
+**Thinking models** spend part of their output budget on reasoning before they answer.
+`OUTPUT_RESERVE` is the budget for both, so raise it if you see empty completions with
+`done_reason=length`.
 
 ---
 
 ## Usage
 
 ```powershell
-# Run every enabled scanner, then the evaluation pass
-python main.py C:\path\to\repo
+# Run every enabled scanner, then dedupe, critic and report
+repo-auditor C:\path\to\repo
 
 # Run specific scanners
-python main.py C:\path\to\repo --scans single-file,owasp
+repo-auditor C:\path\to\repo --scans single-file,arch
 
-# See which plugins are registered
-python main.py --list
+# Use a different model and server
+repo-auditor C:\path\to\repo --model qwen3-coder:30b --ollama http://192.168.1.20:11434
+
+# See which scanners are registered
+repo-auditor --list
 ```
 
 ### CLI reference
 
-| Argument | Description |
-| --- | --- |
-| `repo_path` | Target repository directory. Required unless `--list` is given. |
-| `--scans` | Comma-separated scanner IDs, or `all` (default). |
-| `--list` | Print the registered plugins and exit. |
+| Argument | Default | Description |
+| --- | --- | --- |
+| `repo_path` | | Repository to audit. Required unless `--list` is given. |
+| `--scans` | `all` | Comma-separated scanner IDs, or `all`. Unknown IDs are an error. |
+| `--list` | | Print the registered scanners and exit. |
+| `--model` | `qwen-coder-64k:latest` | Ollama model name. |
+| `--ollama` | `http://localhost:11434` | Ollama server URL. |
+| `--ledger` | `findings.json` | Ledger file, relative to the current directory. |
+| `--report` | `report.md` | Report file, relative to the current directory. |
+| `--extensions` | 33 common source extensions | Comma-separated extensions to audit, e.g. `.py,.go`. |
+| `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, matched exactly. |
+| `--max-turns` | `100` | Model turns allowed for agentic scanners. Retries after failed or empty responses don't count. |
+
+The exit code is `0` on success and `1` when the target doesn't exist, a scanner ID is unknown,
+or the ledger can't be read.
 
 ### Enabling and disabling scanners
 
-Plugins are discovered automatically from `scanners/`. To stop one running as part of `all`,
-**prefix its module filename with an underscore**:
-
-```powershell
-Rename-Item scanners\taint.py scanners\_taint.py
-```
-
-Disabled plugins are still loaded and can be invoked explicitly by ID (`--scans taint`), which
-is convenient for iterating on a scanner you've otherwise parked. `--list` marks them:
-
-```
-Available scan plugins:
-  batch        Batched Context Analysis
-  memory       Memory Corruption Deep Scan
-  owasp        OWASP Top 10 Scan
-  shallow      Shallow Agentic Scan
-  single-file  Single File Analysis
-  taint        Injection & Traversal Taint Scan  (disabled: module name starts with '_')
-```
+Scanners are discovered automatically from `src/auditor/scanners/`. To leave one out of `all`,
+**prefix its module filename with an underscore** (e.g. `owasp.py` → `_owasp.py`). It can still
+be run explicitly with `--scans owasp`, and `--list` marks it as disabled.
 
 ---
 
 ## Scanners
 
-| ID | Name | Model | Focus |
+| ID | Name | Style | Focus |
 | --- | --- | --- | --- |
-| `single-file` | Single File Analysis | Push | Localized defects in one file at a time |
-| `batch` | Batched Context Analysis | Push | Cross-module defects in clusters of related files |
-| `owasp` | OWASP Top 10 Scan | Push | OWASP Top 10 (2021) vulnerability classes |
-| `memory` | Memory Corruption Deep Scan | Push | Buffer overflows, OOB access, use-after-free (C/C++) |
-| `taint` | Injection & Traversal Taint Scan | Pull | SQLi, path traversal, command injection |
-| `shallow` | Shallow Agentic Scan | Pull | Free-form exploratory bug hunting |
+| `single-file` | Single File Analysis | Per-file | Localized defects in one file at a time |
+| `owasp` | OWASP Top 10 Analysis | Per-file | OWASP Top 10 (2021) vulnerabilities |
+| `arch` | Architectural Agentic Scan | Agentic | Cross-file and architectural defects |
 
-### `single-file` — Single File Analysis
+### `single-file`
 
-Reviews each eligible file in isolation with one schema-constrained call. The prompt is tuned
-for microscopic, localized defects: regex errors, malformed strings, off-by-one boundaries, and
-localized logic flaws. Because the model sees no other file, it is instructed to assume all
-imports and external functions exist and behave correctly.
+Reviews each eligible file in isolation with one schema-constrained call. The prompt targets
+small, local defects: regex errors, malformed strings, off-by-one boundaries and local logic
+flaws. Because the model sees only one file, it is told to assume imports and external functions
+exist and behave correctly.
 
-### `batch` — Batched Context Analysis
+### `owasp`
 
-A two-phase pass:
+Same mechanics as `single-file`, with a security prompt. Findings must map to an OWASP Top 10
+(2021) category. Generic logic bugs, style and performance issues are excluded unless they
+directly cause a vulnerability. Each finding carries an `owasp_category` (A01–A10) and a
+`vuln_class` (e.g. `SQL injection`, `CWE-79`).
 
-1. **Planner.** The LLM is shown file paths plus their first few imports and asked to cluster
-   related files into batches of up to `MAX_FILES_PER_BATCH`. Planning runs in windows of
-   `PLANNER_WINDOW` files, because the planner has to echo back every path it is shown and one
-   giant request would blow the output budget. The plan is then reconciled against the real file
-   list — hallucinated paths are dropped and forgotten files are swept into sequential batches.
-2. **Review.** Each cluster is sent as one prompt, so the model can verify cross-module imports,
-   signatures, and contracts. Findings whose `file` field doesn't match a file actually present
-   in that batch are discarded.
+### `arch`
 
-### `owasp` — OWASP Top 10 Scan
+An agent that explores the repository with tools. It traces calls, imports and instantiations
+across files to find mismatched API contracts, exceptions that escape their boundary, resource
+leaks and state-management problems, and logs each one with `report_issue`. It stops when it
+replies `AUDIT_COMPLETE` or reaches `--max-turns`.
 
-Per-file review constrained to an `owasp_category` enum (A01–A10:2021). The prompt forbids
-generic logic bugs, style, and performance issues unless they directly produce a vulnerability,
-and instructs the model to treat third-party library code as correct — only flagging insecure
-*usage* of it. Findings are tagged `category: "security"`.
-
-### `memory` — Memory Corruption Deep Scan
-
-A push-model scanner for manually memory-managed languages. It structurally decomposes C-family
-sources into individual **function units** and pushes small groups of them
-(`MAX_UNITS_PER_REQUEST`, default 10) to the model, alongside the file's top-of-file preamble so
-that `#define`s, typedefs, and struct definitions with real buffer sizes are visible.
-
-Targets buffer overflows, out-of-bounds writes/reads, use-after-free, double-free, uninitialized
-memory, and integer overflow leading to undersized allocations.
-
-Only C-family extensions are scanned (`.c .h .cpp .cc .cxx .hpp .hh .m .mm`).
-
-### `taint` — Injection & Traversal Taint Scan
-
-An agentic scanner that performs interprocedural taint analysis for exactly three classes: **SQL
-injection**, **path traversal**, and **command injection**. It works sink-first:
-
-1. `search_code` for candidate sinks (`execute(`, `os.system`, `shell=True`, `extractall`, …).
-2. `read_file` / `read_file_range` to inspect the enclosing function.
-3. Trace the tainted variable *backwards* through assignments and call sites across files until
-   it reaches a literal, a sanitizer/parameterized API, or a genuine untrusted source.
-
-It is instructed to report only complete, end-to-end source→sink paths and to document the hops.
-
-### `shallow` — Shallow Agentic Scan
-
-The original exploratory agent. Wanders the repository with the same toolset looking for
-definitive localized bugs. Broader but less directed than `taint`.
+When the conversation nears the context limit, the history is compacted into a summary. The
+agent is then reminded of its task and given the exact list of files and line ranges it has
+already read, which the read tools record as they go.
 
 ---
 
 ## Output
 
-Both artifacts are written **into the target repository directory**:
-
 | File | Contents |
 | --- | --- |
-| `findings.json` | Append-only JSONL ledger, one raw finding per line. Written by scanners. |
-| `report.md` | Final human-readable report. Written by the evaluator. |
+| `findings.json` | JSON Lines ledger: one raw finding per line, appended by scanners. |
+| `report.md` | The final report, with the critic's reasoning as reviewer notes. |
 
-> `findings.json` is **append-only and is not cleared between runs.** Delete it if you want a
-> clean slate, otherwise findings from previous runs are re-evaluated and re-reported.
+Both are written relative to the **current directory**, not the audited repository.
 
-### The evaluation pass
+> **The ledger is not cleared between runs.** This is deliberate, for debugging the critic and
+> report without re-running the scanners. Findings from earlier runs, including runs against
+> other repositories, are re-verified and re-reported. Delete `findings.json` for a clean run.
 
-`evaluator.py` does three things:
+### Deduplication
 
-1. **Dedupe.** Findings are grouped by `(file, category, line // 10)` — the line bucketing
-   catches the same defect reported on slightly different lines by different scanners. The
-   highest-confidence entry in each group wins.
-2. **Critic pass.** Each surviving finding is sent back to the LLM together with a ±100-line
-   window of the real file, under a deliberately hostile system prompt that prunes
-   hallucinations, context-dependent guesses, and stylistic nitpicks. The critic can also
-   *downgrade* an inflated severity. Findings whose file cannot be read, or where the critic
-   call fails, are kept — failures fail open.
-3. **Report.** Deterministic Markdown generation (no LLM formatting call), grouped and sorted by
-   severity, including the critic's reasoning as reviewer notes.
+Two findings count as the same defect when all of these hold:
+
+- they are in the same file (path separators and a leading `./` are normalized);
+- their lines are within 10 of each other, or either has no line number;
+- their titles are similar (word overlap of at least 0.5, ignoring filler words like "the" or
+  "potential").
+
+Category is ignored, because the agentic scanner's categories are free text. Of each group, the
+finding with the highest confidence, then highest severity, is kept.
+
+### Critic
+
+Each finding is checked by an agent given about 200 lines around the reported line, plus
+`read_file`, `read_file_range` and `search_code`. It has 10 turns to call `submit_verdict`.
+The critic **fails open**: a finding is kept if its file can't be read, the model never reaches a
+verdict, or requests keep failing. Pressing Ctrl+C during the critic keeps the remaining findings
+unverified and still writes the report. A finding whose path points outside the repository is
+dropped.
 
 ### Finding schema
-
-Scanners append objects with these fields:
 
 | Field | Notes |
 | --- | --- |
 | `title` | Short, specific name |
 | `severity` | `critical` \| `high` \| `medium` \| `low` |
 | `confidence` | `high` \| `medium` \| `low` |
-| `category` | `bug`, `security`, `resource-leak`, `race-condition`, … |
-| `file` | Path relative to the repo root |
+| `category` | `bug`, `security`, `resource-leak`, `race-condition`, `performance`, `correctness`, `api-misuse`, `other` (free text from `arch`) |
+| `file` | Path relative to the repo root, with forward slashes |
 | `line` | 1-indexed, or `null` |
 | `description` | Explanation of the defect |
 | `steps_to_reproduce` | Optional |
 | `suggested_solution` | Concrete minimal fix |
-| `owasp_category` | Added by `owasp` (A01–A10:2021) |
-| `vuln_class` | Added by `memory` (`buffer-overflow`, `use-after-free`, …) |
-| `reviewer_notes` | Added by the evaluator's critic pass |
+| `owasp_category`, `vuln_class` | Added by `owasp` |
+| `reviewer_notes` | Added by the critic |
 
 ---
 
 ## Configuration
 
-All configuration is via environment variables. There is no config file.
-
-### Model and context
+Run-level options are CLI flags (above). Model-budget settings are environment variables:
 
 | Variable | Default | Description |
 | --- | --- | --- |
-| `MODEL` | `qwen-coder-64k:latest` | Ollama model name. |
-| `MAX_CONTEXT` | `66000` | Passed as `num_ctx`. Must not exceed the model's real window. |
-| `OUTPUT_RESERVE` | `10000` | Tokens held back from `num_ctx` for the response, and used as `num_predict`. |
+| `MAX_CONTEXT` | `66000` | Sent as `num_ctx`. Must not exceed the model's real context window. |
+| `OUTPUT_RESERVE` | `10000` | Tokens held back for the response (including a thinking model's reasoning). Sent as `num_predict`. |
+| `MAX_FILE_SIZE_BYTES` | `100000` | Larger files are skipped entirely. |
 
-### File selection
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `MAX_FILES_PER_REPO` | `256` | Cap on files considered per scan. |
-| `MAX_FILE_SIZE_BYTES` | `100000` | Files larger than this are skipped entirely. |
-| `TARGET_FILE_SIZE` | `15000` | Files are prioritized by proximity to this size. |
-
-### Batching
-
-| Variable | Default | Description |
-| --- | --- | --- |
-| `MAX_FILES_PER_BATCH` | `4` | Files per cluster in the `batch` scanner. |
-| `MAX_BATCH_TOKENS` | `45000` | Hard ceiling on a batch/chunk prompt. |
-| `PLANNER_WINDOW` | `40` | Files shown to the batch planner per request. |
-| `MAX_UNITS_PER_REQUEST` | `10` | Functions per request in the `memory` scanner. |
-
-### Prompt overrides
-
-Every scanner's system prompt can be replaced without touching code:
-
-`SINGLE_FILE_PROMPT`, `BATCH_FILE_PROMPT`, `PLANNER_SYSTEM_PROMPT`, `OWASP_SYSTEM_PROMPT`,
-`MEMORY_SYSTEM_PROMPT`, `TAINT_SYSTEM_PROMPT`, `CRITIC_SYSTEM_PROMPT`.
+Token counts are estimated as characters ÷ 3, which over-counts slightly for source code. That
+keeps prompts safely under `num_ctx` and needs no tokenizer download.
 
 ### Which files get audited
 
-A file is eligible when **all** of the following hold:
+A file is reviewed when **all** of these hold:
 
-- Its extension is in `LANG_EXT` (Python, C/C++, JS/TS/JSX/TSX, Vue, PHP, Java, Kotlin, Go,
-  Rust, Ruby, C#, Swift, Objective-C/C++, Scala, Perl, Shell, Lua, Dart).
-- No parent directory is in `SKIP_DIRS` (`tests`, `node_modules`, `vendor`, `build`, `dist`,
-  `.venv`, `third_party`, `generated`, …).
-- The filename does not contain `test` or `min`.
-- It is under `MAX_FILE_SIZE_BYTES`.
-
-Edit `LANG_EXT` / `SKIP_DIRS` in `scanners/common.py` to change this.
+- its extension is in `--extensions`;
+- no parent directory is in `--skip-dirs`;
+- its name doesn't look like a test or minified file (`test_*`, `*_test.*`, `*_tests.*`,
+  `*.test.*`, `*.spec.*`, `*.min.*`);
+- it is no larger than `MAX_FILE_SIZE_BYTES`.
 
 ---
 
 ## Writing a new scanner
 
-Drop a module into `scanners/`. Anything subclassing `BaseScanner` is registered automatically
-by `id` — no manual registration required.
+Add a module to `src/auditor/scanners/`. Every concrete `BaseScanner` subclass defined in it is
+registered by its `id`. Subclasses imported from other modules are not registered again.
+
+`BaseScanner` provides `self.client`, `self.model`, `self.target_dir`, `self.ledger_path`,
+`self.extensions`, `self.skip_dirs`, `self.max_turns`, and the `self.on_progress`,
+`self.on_warning` and `self.on_error` callbacks.
+
+### A per-file scanner
+
+Subclass `SingleFileScanner` and override its class attributes:
 
 ```python
-# scanners/my_scan.py
-from .base import BaseScanner
-from .common import MODEL, FINDINGS_SCHEMA, pick_files, number_lines, call_json, append_finding
+# src/auditor/scanners/concurrency.py
+from .single_file import SingleFileScanner, make_findings_schema
 
-SYSTEM_PROMPT = "You are a ..."
+class ConcurrencyScanner(SingleFileScanner):
+    id = "concurrency"
+    name = "Concurrency Analysis"
 
-class MyScanner(BaseScanner):
-    id = "my-scan"              # --scans my-scan
-    name = "My Custom Scan"     # shown in --list and run headers
-    model = MODEL
-
-    def run(self) -> None:
-        for relpath in pick_files(self.target_dir):
-            content = (self.target_dir / relpath).read_text(encoding="utf-8", errors="replace")
-            user = f"File: {relpath}\n\n{number_lines(content)}"
-
-            data = call_json(self.client, self.model, SYSTEM_PROMPT, user, FINDINGS_SCHEMA)
-            for finding in data.get("findings", []):
-                finding["file"] = relpath
-                append_finding(self.ledger_path, finding)
+    SYSTEM_PROMPT = "You are reviewing a single file for data races and deadlocks. ..."
+    USER_INSTRUCTION = "Audit this file snippet for real concurrency defects."
+    SCHEMA = make_findings_schema(
+        extra_properties={"shared_state": {"type": "string"}},
+        extra_required=["shared_state"],
+    )
 ```
 
-`BaseScanner.__init__` gives you `self.client` (Ollama client), `self.target_dir` (resolved
-`Path`), and `self.ledger_path`.
+### An agentic scanner
 
-### Helpers in `scanners/common.py`
-
-| Helper | Purpose |
-| --- | --- |
-| `pick_files(target_dir, extensions=None)` | Eligible, size-prioritized relative paths. |
-| `number_lines(content)` | Renders a line-number gutter so the model cites real lines. |
-| `call_json(client, model, system, user, schema)` | Schema-constrained call with retries. |
-| `append_finding(ledger_path, finding)` | Appends one JSONL record. |
-| `estimate_tokens(text)` | `tiktoken` if available, else a length heuristic. |
-| `FINDINGS_SCHEMA`, `OWASP_FINDINGS_SCHEMA`, `MEMORY_FINDINGS_SCHEMA` | Response schemas. |
-
-`call_json` rejects an over-budget prompt up front, sets `num_predict`, raises a descriptive
-error on empty completions (including Ollama's `done_reason`), strips stray ```` ```json ````
-fences, and escalates temperature across retries so a retry isn't a deterministic replay of the
-same failure.
-
-### Writing an agentic scanner
-
-Use `run_agent_loop` from `scanners/agent_loop.py` — don't hand-roll the loop:
+Build tools for the repository root and hand them to `run_agent_loop`:
 
 ```python
 from .base import BaseScanner
-from .agent_loop import run_agent_loop
-from .common import MODEL
-from agent.tools import list_files, read_file, read_file_range, search_code, report_issue
+from ..agent.agent import run_agent_loop
+from ..agent.coverage import ReadCoverage
+from ..agent.tools import (
+    make_list_files_tool, make_read_file_tool, make_read_file_range_tool,
+    make_search_code_tool, make_report_issue_tool,
+)
 
 class MyAgentScanner(BaseScanner):
     id = "my-agent"
     name = "My Agentic Scan"
-    model = MODEL
 
     def run(self) -> None:
+        coverage = ReadCoverage()
+        root = self.target_dir
         run_agent_loop(
             client=self.client,
             model=self.model,
-            target_dir=self.target_dir,
-            ledger_path=self.ledger_path,
-            system_prompt=SYSTEM_PROMPT,
-            initial_user_prompt="Begin the audit...",
-            tools=[list_files, read_file, read_file_range, search_code, report_issue],
-            label="My Agent",
-            max_turns=80,
+            system_prompt="You are ... Reply AUDIT_COMPLETE when done.",
+            initial_user_prompt="Begin the audit.",
+            tools=[
+                make_list_files_tool(root, self.extensions, self.skip_dirs),
+                make_read_file_tool(root, coverage),
+                make_read_file_range_tool(root, coverage),
+                make_search_code_tool(root, self.extensions, self.skip_dirs),
+                make_report_issue_tool(root, self.ledger_path),
+            ],
+            max_turns=self.max_turns,
+            coverage=coverage,
+            on_progress=self.on_progress,
+            on_warning=self.on_warning,
+            on_error=self.on_error,
         )
 ```
 
-The loop handles `chdir` into the target, wiring `AUDIT_LEDGER_PATH` for `report_issue`, token
-accounting (including tool-call arguments), LLM-based history compaction when the context fills
-up, empty-completion recovery, turn limits, and `Ctrl+C`.
+`run_agent_loop` handles token accounting, history compaction, retries for failed and empty
+responses, the turn limit and Ctrl+C. It returns a `LoopOutcome` (`completed`, `turn_limit`,
+`aborted` or `interrupted`). To stop on something other than a stop phrase, pass
+`stop_token=None` and an `is_done` callback; the critic does this to stop once `submit_verdict`
+has been called.
 
 ---
 
 ## Agent tools
 
-Available to agentic scanners, defined in `agent/tools.py`:
+Defined in `src/auditor/agent/tools.py`. Each is created by a factory bound to the repository
+root:
 
 | Tool | Description |
 | --- | --- |
-| `list_files(directory)` | List a directory. |
-| `read_file(filepath)` | Whole file, refused above `MAX_READ_TOKENS` (15000). |
-| `read_file_range(filepath, start_line, end_line)` | Line-numbered slice of a large file. |
-| `search_code(query, directory)` | Literal text search, capped at `MAX_SEARCH_RESULTS` (100). |
-| `report_issue(...)` | Append a finding to the ledger. |
+| `list_files(directory)` | Lists a directory, applying the extension and skip-dir filters. |
+| `read_file(filepath)` | Whole file with line numbers. Refused above 15,000 estimated tokens. |
+| `read_file_range(filepath, start_line, end_line)` | A line-numbered slice of a file. |
+| `search_code(query, directory)` | Literal, case-sensitive text search, capped at 100 matches. |
+| `report_issue(...)` | Appends a finding to the ledger (agentic scanners). |
+| `submit_verdict(...)` | Records the critic's keep/reject decision (critic only). |
 
-**Security note.** The repository being audited is untrusted input, and its contents are fed
-into the model — a malicious repo could attempt prompt injection to make the agent read
-arbitrary files. All path-taking tools resolve through `_resolve_within_root()`, which confines
-access to the target repository root and rejects absolute paths and `..` traversal.
+**Security.** The repository under audit is untrusted, and its contents go straight into the
+model's context, so a malicious repository could try prompt injection to read other files. Every
+path-taking tool resolves paths against the bound root and rejects anything that escapes it,
+including absolute paths and `..`.
 
-The read and search caps exist for a practical reason too: unbounded tool output floods the
-conversation, exhausts the context window, and causes the model to return empty completions.
+The read and search caps also stop one tool result from filling the context window.
 
 ---
 
 ## Project layout
 
 ```
-main.py                  CLI entry point, plugin discovery, orchestration
-evaluator.py             Dedupe → LLM critic pass → report.md
-README.md
+src/auditor/
+  __main__.py          python -m auditor
+  cli.py               Argument parsing and the repo-auditor entry point
+  pipeline.py          Scanner discovery and the scan → dedupe → critic → report pipeline
 
-agent/
-  __init__.py            Re-exports the tool functions
-  tools.py               Sandboxed tools exposed to agentic scanners
+  agent/
+    agent.py           Shared tool-calling loop, context tracking and compaction
+    tools.py           Root-bound tool factories
+    coverage.py        Records which files and line ranges an agent has read
 
-scanners/
-  base.py                BaseScanner ABC
-  common.py              Config, schemas, file selection, call_json, helpers
-  agent_loop.py          Reusable tool-calling loop for agentic scanners
-  code_units.py          C-family source → function units (for the memory scanner)
+  scanners/
+    base.py            BaseScanner
+    single_file.py     Per-file scanner template and the single-file scanner
+    owasp.py           OWASP Top 10 scanner (a SingleFileScanner subclass)
+    architectural.py   Agentic cross-file scanner
 
-  single_file.py         Push  — per-file localized defects
-  batch.py               Push  — LLM-planned clusters of related files
-  owasp.py               Push  — OWASP Top 10
-  memory.py              Push  — memory corruption, function-level
-  taint.py               Pull  — SQLi / traversal / command injection
-  shallow.py             Pull  — exploratory bug hunting
+  evaluator/
+    dedupe.py          Merges duplicate findings
+    critic.py          Agentic verification of each finding
+    reporter.py        Markdown report
+
+  utils/
+    llm.py             Token estimate and schema-constrained calls with retries
+    filesystem.py      File selection, line numbering and ledger writes
+
+test/                  pytest suite, mirroring src/auditor/
 ```
 
 ---
 
-## Design notes and limitations
+## Development
 
-**Function extraction is structural, not a real AST.** `scanners/code_units.py` splits C-family
-code by brace/paren matching over a copy of the source with comments and string literals masked
-out, recursing into `class`/`struct`/`namespace` bodies. Real C/C++ parsers (libclang,
-tree-sitter) need per-repo include paths and compile flags to parse unpreprocessed source, which
-isn't available when auditing an arbitrary clone — so this trades a little accuracy for working
-everywhere with no native dependency. Measured on a large real C++ codebase: 1403 functions
-extracted with 3 line-number misalignments.
+```powershell
+pip install -r requirements-dev.txt
+pip install -e .
+pytest
+```
 
-**Static analysis only.** Nothing is executed, built, or run. The tool never writes to the
-repository under audit except for `findings.json` and `report.md`.
+`pytest` finds the sources through `pyproject.toml`, so no `PYTHONPATH` is needed. CI runs the
+suite with coverage on Python 3.10–3.13.
 
-**Findings are leads, not verdicts.** Even after the critic pass, output is LLM-generated and
-will contain false positives. Review before acting. An empty report is a legitimate result — the
-prompts are deliberately tuned to suppress stylistic noise.
+---
 
-**Results are not deterministic.** Calls use `temperature: 0.0`, but retries escalate
-temperature, and model/server changes will shift output.
+## Limitations
 
-**Known rough edges:**
-
-- The Ollama host is hardcoded in `main.py` rather than configurable.
-- Scanners run sequentially; a full `all` run over a large repository is slow.
-- `findings.json` accumulates across runs unless manually deleted.
-- The `memory` scanner is C-family only and silently does nothing on other repositories.
+- **Static analysis only.** Nothing in the audited repository is executed or modified.
+- **Findings are leads, not verdicts.** Even after the critic, output is model-generated and
+  will contain false positives. Review before acting. An empty report is a legitimate result.
+- **Not deterministic.** Calls use temperature 0, but retries raise it, and model or server
+  changes shift results.
+- **Sequential.** Scanners and files are processed one at a time, so a full run over a large
+  repository is slow. With `all`, every file is reviewed by both `single-file` and `owasp`.

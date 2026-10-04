@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "repo-auditor"
+version = "0.1.0"
+description = "Audits a code repository for bugs and vulnerabilities using a local Ollama model."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = ["ollama>=0.6.2,<0.7"]
+
+[project.optional-dependencies]
+dev = ["pytest>=9", "pytest-cov>=7"]
+
+[project.scripts]
+repo-auditor = "auditor.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+# Lets `pytest` run from a fresh checkout without PYTHONPATH or an install.
+pythonpath = ["src"]

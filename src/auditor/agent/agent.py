@@ -1,3 +1,4 @@
+import logging
 from enum import Enum
 from typing import Callable
 from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens
@@ -8,6 +9,8 @@ MAX_HISTORY_MESSAGES = 200
 MAX_CONSECUTIVE_EMPTY = 3
 MAX_CONSECUTIVE_ERRORS = 3
 DEFAULT_MAX_TURNS = 100
+
+logger = logging.getLogger(__name__)
 
 class LoopOutcome(str, Enum):
     COMPLETED = "completed"      # stop token emitted or is_done() returned True
@@ -25,22 +28,28 @@ class ConversationContext:
         self.system_prompt = system_prompt
         self.initial_user_prompt = initial_user_prompt
         self.coverage = coverage
-        self.messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": initial_user_prompt},
-        ]
         self.safety_margin = CONTEXT_SAFETY_MARGIN
         self.max_history = MAX_HISTORY_MESSAGES
+        self.messages: list = []
+        self._token_count = 0
+        self.extend([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": initial_user_prompt},
+        ])
 
     @property
     def token_count(self) -> int:
-        total = 0
-        for m in self.messages:
-            _, content, calls = self._message_parts(m)
-            total += estimate_tokens(content)
-            # Tool-call messages carry empty content but their arguments still cost tokens.
-            for call in calls:
-                total += estimate_tokens(str(call))
+        # Maintained incrementally by append/extend/compact, so the history is never re-tokenized.
+        return self._token_count
+
+    def _estimate_message(self, m) -> int:
+        _, content, calls = self._message_parts(m)
+        total = estimate_tokens(content)
+        # Thinking models' reasoning is sent back with the assistant message, so it costs context too.
+        total += estimate_tokens(self._get(m, "thinking") or "")
+        # Tool-call messages carry empty content but their arguments still cost tokens.
+        for call in calls:
+            total += estimate_tokens(str(call))
         return total
 
     @property
@@ -50,9 +59,11 @@ class ConversationContext:
 
     def append(self, message) -> None:
         self.messages.append(message)
+        self._token_count += self._estimate_message(message)
 
     def extend(self, messages) -> None:
-        self.messages.extend(messages)
+        for message in messages:
+            self.append(message)
 
     def get_payload(self) -> list:
         return self.messages
@@ -85,7 +96,7 @@ class ConversationContext:
                 )
                 summary = (response.message.content or "").strip()
             except Exception as e:
-                print(f"    ! History summarization failed, falling back to raw action log: {e}")
+                logger.warning("History summarization failed, falling back to raw action log: %s", e)
 
         if not summary:
             summary = digest or "(no actions recorded)"
@@ -109,15 +120,20 @@ class ConversationContext:
             "re-check something specific."
         )
 
-        self.messages = [
+        self.messages = []
+        self._token_count = 0
+        self.extend([
             {"role": "system", "content": self.system_prompt},
             {"role": "user", "content": continuation},
-        ]
+        ])
+
+    @staticmethod
+    def _get(m, key):
+        """Reads a field from either a plain dict message or an ollama Message object."""
+        return m.get(key) if isinstance(m, dict) else getattr(m, key, None)
 
     def _message_parts(self, m) -> tuple:
-        if isinstance(m, dict):
-            return m.get("role", ""), (m.get("content") or ""), (m.get("tool_calls") or [])
-        return getattr(m, "role", ""), (getattr(m, "content", "") or ""), (getattr(m, "tool_calls", None) or [])
+        return self._get(m, "role") or "", self._get(m, "content") or "", self._get(m, "tool_calls") or []
 
     def _history_digest(self, max_entries: int = 120) -> str:
         """Condenses the conversation into a short action log of tool calls and agent notes."""

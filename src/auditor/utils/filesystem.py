@@ -1,21 +1,9 @@
-
-
 import fnmatch
 import json
 import os
 from pathlib import Path
 
-from .llm import estimate_tokens
-
 MAX_FILE_SIZE_BYTES = int(os.getenv("MAX_FILE_SIZE_BYTES", "100000"))
-TARGET_FILE_SIZE = int(os.getenv("TARGET_FILE_SIZE", "15000"))
-MAX_FILES_PER_REPO = int(os.getenv("MAX_FILES_PER_REPO", "256"))
-
-SKIP_DIRS = {
-    "test", "tests", "testing", "spec", "__pycache__", ".venv", "venv",
-    "node_modules", "vendor", "third_party", "thirdparty", "generated",
-    "build", "dist", "site-packages", ".git"
-}
 
 # Glob patterns (matched against the lowercased filename) for test and minified files.
 # Patterns rather than a substring match, so files like "latest.py" or "contest.c" are kept.
@@ -52,7 +40,6 @@ def is_auditable(relpath: str, extensions: set | dict | None = None, skip_dirs: 
     return ext in extensions
 
 
-# 4. Add the extensions parameter here as well so they can be passed through
 def list_auditable_files(target_dir: Path, extensions: set | dict | None = None, skip_dirs: set | None = None) -> list[str]:
     """Walks target_dir and returns a list of relative paths."""
     

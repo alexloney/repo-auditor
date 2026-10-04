@@ -51,6 +51,10 @@ def filter_scanners(requested_scans: str, available_scanners: dict[str, type[Bas
     selected_scanners = [available_scanners[sid] for sid in selected_ids if sid in available_scanners]
     return selected_scanners, skipped_ids
 
+def _prefixed(callback: Callable[[str], None], label: str) -> Callable[[str], None]:
+    """Wraps a callback so every message is indented and tagged with the emitting component."""
+    return lambda msg: callback(f"  {label} {msg}")
+
 def execute_audit(target_dir: Path, 
                   scanners_to_run: list[type[BaseScanner]], 
                   model: str, 
@@ -72,12 +76,12 @@ def execute_audit(target_dir: Path,
     ledger_path = Path(ledger_file).resolve()
     report_path = Path(report_file).resolve()
 
-    on_progress_noop = lambda msg: on_progress(f"{msg}") if on_progress else None
-    on_warning_noop = lambda msg: on_warning(f"{msg}") if on_warning else None
-    on_error_noop = lambda msg: on_error(f"{msg}") if on_error else None
+    on_progress = on_progress or (lambda _: None)
+    on_warning = on_warning or (lambda _: None)
+    on_error = on_error or (lambda _: None)
 
-    # Loop through scanners and 
     for scanner_class in scanners_to_run:
+        label = f"[{scanner_class.name}]"
         scanner_instance = scanner_class(
             client=client,
             model=model,
@@ -86,14 +90,14 @@ def execute_audit(target_dir: Path,
             extensions=extensions,
             skip_dirs=skip_dirs,
             max_turns=max_turns,
-            on_progress=lambda msg: on_progress_noop(f"  [{scanner_class.name}] {msg}"),
-            on_warning=lambda msg: on_warning_noop(f"  [{scanner_class.name}] {msg}"),
-            on_error=lambda msg: on_error_noop(f"  [{scanner_class.name}] {msg}"),
+            on_progress=_prefixed(on_progress, label),
+            on_warning=_prefixed(on_warning, label),
+            on_error=_prefixed(on_error, label),
         )
         scanner_instance.run()
 
     if not ledger_path.exists():
-        on_progress_noop("No findings ledger found. Skipping evaluation and report generation.")
+        on_progress("No findings ledger found. Skipping evaluation and report generation.")
         return 0
 
     raw_findings = []
@@ -105,13 +109,13 @@ def execute_audit(target_dir: Path,
                 try:
                     raw_findings.append(json.loads(line))
                 except json.JSONDecodeError:
-                    on_warning_noop(f"Skipping malformed ledger entry at line {lineno}") if on_warning else None
+                    on_warning(f"Skipping malformed ledger entry at line {lineno}")
     except OSError as e:
-        on_error_noop(f"Failed to read ledger: {e}")
+        on_error(f"Failed to read ledger: {e}")
         return 1
 
     unique_findings = dedupe_findings(raw_findings)
-    on_progress_noop(f"{len(unique_findings)} unique finding(s) before verification.")
+    on_progress(f"{len(unique_findings)} unique finding(s) before verification.")
     
     if unique_findings:
         verified_findings = verify_findings(client, 
@@ -120,14 +124,14 @@ def execute_audit(target_dir: Path,
                                             unique_findings,
                                             extensions,
                                             skip_dirs,
-                                            on_progress=lambda msg: on_progress_noop(f"  [Critic] {msg}"), 
-                                            on_warning=lambda msg: on_warning_noop(f"  [Critic] {msg}"), 
-                                            on_error=lambda msg: on_error_noop(f"  [Critic] {msg}"))
-        on_progress_noop(f"{len(verified_findings)} finding(s) survived critic pass.")
+                                            on_progress=_prefixed(on_progress, "[Critic]"),
+                                            on_warning=_prefixed(on_warning, "[Critic]"),
+                                            on_error=_prefixed(on_error, "[Critic]"))
+        on_progress(f"{len(verified_findings)} finding(s) survived critic pass.")
     else:
         verified_findings = []
-        on_progress_noop("No findings survived verification.") 
+        on_progress("No findings to verify.")
 
     write_report(target_dir, report_path, verified_findings)
-    on_progress_noop(f"Report written to {report_path}")
+    on_progress(f"Report written to {report_path}")
     return 0

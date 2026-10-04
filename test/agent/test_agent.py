@@ -332,3 +332,28 @@ def test_chat_with_retries_empty_abort(mock_ctx):
     assert status == "abort"
     assert error_state["empty"] == MAX_CONSECUTIVE_EMPTY
     assert mock_warn_cb.call_count == 2
+def test_context_token_count_is_incremental_and_counts_thinking():
+    """token_count tracks appends without re-tokenizing, and includes reasoning text."""
+    ctx = ConversationContext(MagicMock(), "model", "sys", "user")
+    before = ctx.token_count
+
+    msg = MagicMock()
+    msg.role, msg.content, msg.tool_calls = "assistant", "", []
+    msg.thinking = "x" * 300
+    ctx.append(msg)
+
+    assert ctx.token_count == before + 100  # 300 chars / 3
+
+    with patch("auditor.agent.agent.estimate_tokens") as mock_estimate:
+        _ = ctx.token_count
+        mock_estimate.assert_not_called()
+
+def test_context_token_count_resets_on_compaction():
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(content="- summary")
+    ctx = ConversationContext(mock_client, "model", "sys", "user")
+    ctx.append({"role": "assistant", "content": "y" * 3000})
+
+    ctx.compact()
+
+    assert ctx.token_count == sum(ctx._estimate_message(m) for m in ctx.get_payload())

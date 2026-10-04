@@ -1,7 +1,5 @@
-import os
 from pathlib import Path
 from datetime import datetime
-import json
 
 def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
     """Formats verified findings into a Markdown file."""
