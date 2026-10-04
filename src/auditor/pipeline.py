@@ -56,8 +56,13 @@ def execute_audit(target_dir: Path,
                   skip_dirs: list[str] | None = None,
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
-                  on_error: Callable[[str], None] = None):
+                  on_error: Callable[[str], None] = None) -> int:
+    """Runs the scanners, verifies the findings, and writes the report. Returns a process exit code."""
     client = ollama.Client(host=f"{ollama_host}")
+    # NOTE: The ledger is intentionally NOT cleared between runs. Scanners only append to it,
+    # so findings from earlier runs (possibly against other repos) are re-verified and
+    # re-reported. This is deliberate for now, to make debugging the critic/reporter easier
+    # without re-running the scanners. Delete the ledger file manually for a clean run.
     ledger_path = Path(ledger_file).resolve()
     report_path = Path(report_file).resolve()
 
@@ -82,7 +87,7 @@ def execute_audit(target_dir: Path,
 
     if not ledger_path.exists():
         on_progress_noop("No findings ledger found. Skipping evaluation and report generation.")
-        return
+        return 0
 
     raw_findings = []
     try:
@@ -96,7 +101,7 @@ def execute_audit(target_dir: Path,
                     on_warning_noop(f"Skipping malformed ledger entry at line {lineno}") if on_warning else None
     except OSError as e:
         on_error_noop(f"Failed to read ledger: {e}")
-        return
+        return 1
 
     unique_findings = dedupe_findings(raw_findings)
     on_progress_noop(f"{len(unique_findings)} unique finding(s) before verification.")
@@ -118,3 +123,4 @@ def execute_audit(target_dir: Path,
 
     write_report(target_dir, report_path, verified_findings)
     on_progress_noop(f"Report written to {report_path}")
+    return 0

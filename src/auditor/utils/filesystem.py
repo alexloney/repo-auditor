@@ -1,5 +1,6 @@
 
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -16,9 +17,11 @@ SKIP_DIRS = {
     "build", "dist", "site-packages", ".git"
 }
 
-SKIP_FILES = {
-    "test", ".min."
-}
+# Glob patterns (matched against the lowercased filename) for test and minified files.
+# Patterns rather than a substring match, so files like "latest.py" or "contest.c" are kept.
+SKIP_FILE_PATTERNS = (
+    "test_*", "*_test.*", "*_tests.*", "*.test.*", "*.spec.*", "*.min.*",
+)
 
 def number_lines(content: str) -> str:
     """
@@ -37,7 +40,7 @@ def is_auditable(relpath: str, extensions: set | dict | None = None, skip_dirs: 
         return False
 
     filename = parts[-1]
-    if any(skip in filename for skip in SKIP_FILES):
+    if any(fnmatch.fnmatchcase(filename, pattern) for pattern in SKIP_FILE_PATTERNS):
         return False
 
     ext = os.path.splitext(filename)[1]
@@ -57,9 +60,6 @@ def list_auditable_files(target_dir: Path, extensions: set | dict | None = None,
     if skip_dirs is not None:
         directories_to_skip.update(skip_dirs)
 
-    if extensions is None:
-        extensions = set()
-
     found = []
     
     for root, dirs, files in os.walk(target_dir):
@@ -68,9 +68,11 @@ def list_auditable_files(target_dir: Path, extensions: set | dict | None = None,
 
         for name in files:
             full = Path(root) / name
-            rel = str(full.relative_to(target_dir))
-            
-            # Now 'extensions' is defined and safely passes None or the custom set
+            # Always use forward slashes so findings from different scanners (and OSes)
+            # share the same path and can be deduplicated against each other.
+            rel = full.relative_to(target_dir).as_posix()
+
+            # extensions=None means every file extension is auditable
             if not is_auditable(rel, extensions, skip_dirs):
                 continue
 

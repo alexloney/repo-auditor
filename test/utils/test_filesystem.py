@@ -96,3 +96,25 @@ def test_append_finding(tmp_path):
     
     assert data["title"] == "Buffer Overflow"
     assert data["severity"] == "critical"
+def test_is_auditable_does_not_skip_test_substrings():
+    assert is_auditable("src/latest.py", extensions={".py"}) is True
+    assert is_auditable("src/contest.c", extensions={".c"}) is True
+
+def test_is_auditable_skips_test_file_patterns():
+    assert is_auditable("pkg/foo_test.go", extensions={".go"}) is False
+    assert is_auditable("web/app.spec.ts", extensions={".ts"}) is False
+    assert is_auditable("web/app.test.js", extensions={".js"}) is False
+
+def test_list_auditable_files_none_extensions_means_all(tmp_path):
+    (tmp_path / "main.py").write_text("pass")
+    (tmp_path / "style.css").write_text("body {}")
+
+    results = list_auditable_files(tmp_path, extensions=None, skip_dirs=None)
+
+    assert sorted(results) == ["main.py", "style.css"]
+
+def test_list_auditable_files_uses_forward_slashes(tmp_path):
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "main.py").write_text("pass")
+
+    assert list_auditable_files(tmp_path, extensions={".py"}) == ["src/main.py"]

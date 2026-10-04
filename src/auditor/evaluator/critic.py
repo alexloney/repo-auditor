@@ -5,6 +5,7 @@ from pathlib import Path
 import ollama
 
 from ..agent.tools import read_file, submit_verdict, make_search_code_tool
+from ..utils.llm import MAX_CONTEXT, OUTPUT_RESERVE
 
 CRITIC_SYSTEM_PROMPT = (
     "You are a strict, highly skeptical principal engineer reviewing automated static analysis findings. "
@@ -16,6 +17,20 @@ CRITIC_SYSTEM_PROMPT = (
     "3. If the finding is mathematically/logically real but severity is inflated, lower adjusted_severity. "
     "4. When you have enough evidence, you MUST call the `submit_verdict` tool to finalize your review."
 )
+
+VALID_SEVERITIES = {"critical", "high", "medium", "low"}
+
+def _parse_bool(value, default: bool = True) -> bool:
+    """Interprets a tool-call boolean leniently; local models often send "false" as a string."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in ("false", "no", "0"):
+            return False
+        if lowered in ("true", "yes", "1"):
+            return True
+    return default
 
 def verify_findings(client: ollama.Client, 
                     model: str,
@@ -93,7 +108,14 @@ def verify_findings(client: ollama.Client,
                         model=model,
                         messages=messages,
                         tools=tools,
-                        options={"temperature": 0.0}
+                        # Match the scanners' context settings. Without num_ctx, Ollama falls back to
+                        # its small default window and silently truncates the prompt. num_predict
+                        # leaves OUTPUT_RESERVE tokens for the model's reasoning/thinking + verdict.
+                        options={
+                            "temperature": 0.0,
+                            "num_ctx": MAX_CONTEXT,
+                            "num_predict": OUTPUT_RESERVE,
+                        }
                     )
                 except Exception as e:
                     on_warning(f" ! Critic call failed, keeping finding: {e}") if on_warning else None
@@ -120,10 +142,12 @@ def verify_findings(client: ollama.Client,
                     
                     if func_name == "submit_verdict":
                         verdict_reached = True
-                        is_genuine = args.get("is_genuine_bug", True)
-                        
+                        is_genuine = _parse_bool(args.get("is_genuine_bug"), default=True)
+
                         if is_genuine:
-                            f_["severity"] = args.get("adjusted_severity", f_.get("severity", "medium"))
+                            adjusted = str(args.get("adjusted_severity", "")).strip().lower()
+                            if adjusted in VALID_SEVERITIES:
+                                f_["severity"] = adjusted
                             f_["reviewer_notes"] = args.get("reasoning", "")
                             verified.append(f_)
                             on_progress(f" - Kept: {args.get('reasoning')}") if on_progress else None
@@ -144,7 +168,7 @@ def verify_findings(client: ollama.Client,
                     messages.append({
                         "role": "tool",
                         "content": str(result),
-                        "name": func_name
+                        "tool_name": func_name
                     })
                 
                 if verdict_reached:

@@ -154,3 +154,31 @@ def test_report_issue(workspace):
 def test_submit_verdict():
     # Simple static string return
     assert submit_verdict(True, "Looks real", "high") == "Verdict received."
+def test_report_issue_normalizes_path(workspace):
+    ledger_path = workspace / "ledger.json"
+    report_issue = make_report_issue_tool(ledger_path)
+
+    report_issue(filepath=r"./src\app.py", line=1, title="t", description="d")
+
+    data = json.loads(ledger_path.read_text(encoding="utf-8"))
+    assert data["file"] == "src/app.py"
+
+def test_report_issue_rejects_path_outside_repo(workspace):
+    ledger_path = workspace / "ledger.json"
+    report_issue = make_report_issue_tool(ledger_path)
+
+    result = report_issue(filepath="../outside.py", line=1, title="t", description="d")
+
+    assert result.startswith("Error logging issue")
+    assert not ledger_path.exists()
+
+def test_tool_parameter_descriptions_reach_schema():
+    from ollama._utils import convert_function_to_tool
+    tools = [read_file, read_file_range, submit_verdict,
+             make_list_files_tool(None, None), make_search_code_tool(None, None),
+             make_report_issue_tool(Path("unused.json"))]
+
+    for tool in tools:
+        props = convert_function_to_tool(tool).function.parameters.properties
+        for name, prop in props.items():
+            assert prop.description, f"{tool.__name__}.{name} has no description"

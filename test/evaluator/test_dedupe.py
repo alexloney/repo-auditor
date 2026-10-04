@@ -66,3 +66,10 @@ def test_dedupe_findings_sorts_by_severity():
     assert results[1]["severity"] == "high"
     assert results[2]["severity"] == "medium"
     assert results[3]["severity"] == "low"
+def test_dedupe_findings_normalizes_path_separators():
+    findings = [
+        {"title": "A", "file": r"src\app.py", "category": "bug", "line": 12, "confidence": "high"},
+        {"title": "B", "file": "./src/app.py", "category": "bug", "line": 13, "confidence": "high"},
+    ]
+
+    assert len(dedupe_findings(findings)) == 1

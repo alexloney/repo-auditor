@@ -7,7 +7,10 @@ def dedupe_findings(findings: list) -> list:
     for f_ in findings:
         line_val = f_.get("line")
         approx_line = line_val // 10 if isinstance(line_val, int) else 0
-        key = (f_.get("file"), f_.get("category"), approx_line)
+        # Normalize separators so "src\\a.py", "./src/a.py" and "src/a.py" share a key
+        # (older ledger entries may predate path normalization in the scanners).
+        file_key = (f_.get("file") or "").replace("\\", "/").removeprefix("./")
+        key = (file_key, f_.get("category"), approx_line)
         
         cur = best.get(key)
         if cur is None or conf_rank.get(f_.get("confidence"), 9) < conf_rank.get(cur.get("confidence"), 9):

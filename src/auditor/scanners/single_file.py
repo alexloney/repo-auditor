@@ -13,7 +13,7 @@ SINGLE_FILE_PROMPT = (
     "3. Focus exclusively on microscopic, localized defects: regex parsing errors, malformed strings, "
     "off-by-one boundary conditions, and localized math/logic flaws. "
     "4. STRICTLY IGNORE stylistic issues, missing docstrings, or naming conventions. "
-    "Return ONLY the JSON object. If no definitive localized bugs exist, return an empty array."
+    "Return ONLY the JSON object. If no definitive localized bugs exist, return {\"findings\": []}."
 )
 
 SINGLE_FILE_FINDINGS_SCHEMA = {

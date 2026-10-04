@@ -193,7 +193,7 @@ def _execute_tools(tool_calls: list, available_tools: dict, on_progress: Callabl
         results.append({
             "role": "tool",
             "content": result_str,
-            "name": func_name,
+            "tool_name": func_name,
         })
     return results
 

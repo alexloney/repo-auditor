@@ -23,7 +23,10 @@ def _resolve_within_root(path_str: str) -> Path:
 
 def read_file(filepath: str) -> str:
     """
-    Reads the complete contents of a specific source code file.
+    Reads the complete contents of a specific source code file, prefixed with line numbers.
+
+    Args:
+        filepath: Path of the file to read, relative to the repository root.
     """
     try:
         target = _resolve_within_root(filepath)
@@ -40,6 +43,11 @@ def read_file_range(filepath: str, start_line: int, end_line: int) -> str:
     """
     Reads a specific 1-indexed, inclusive line range of a source file, prefixed with line numbers.
     Use this to inspect a region of a file that is too large to read in full.
+
+    Args:
+        filepath: Path of the file to read, relative to the repository root.
+        start_line: First line to return (1-indexed, inclusive).
+        end_line: Last line to return (1-indexed, inclusive).
     """
     try:
         target = _resolve_within_root(filepath)
@@ -67,8 +75,10 @@ def make_list_files_tool(extensions: list[str] | None, skip_dirs: list[str] | No
 
     def list_files(directory: str) -> str:
         """
-        Lists all files and folders in the given directory. 
-        Use '.' to list the current directory.
+        Lists all files and folders in the given directory. Folders end with a trailing '/'.
+
+        Args:
+            directory: Directory to list, relative to the repository root. Use '.' for the root.
         """
         try:
             target = _resolve_within_root(directory)
@@ -102,6 +112,10 @@ def make_search_code_tool(extensions: list[str] | None, skip_dirs: list[str] | N
         """
         Searches for a specific text string across all files in the directory.
         Returns the file path, line number, and the matching line of code.
+
+        Args:
+            query: Exact, case-sensitive text to search for (not a regex).
+            directory: Directory to search recursively, relative to the repository root. Defaults to '.'.
         """
         try:
             target = _resolve_within_root(directory)
@@ -164,15 +178,31 @@ def make_report_issue_tool(ledger_path: Path):
     ) -> str:
         """
         Logs a discovered bug, vulnerability, or bad practice into the ledger.
-        You must provide the filepath, the exact line number, a short title, a detailed
-        description, a severity ("critical", "high", "medium", or "low"), a category
-        (e.g. "bug", "security", "performance"), and a suggested fix.
+
+        Args:
+            filepath: Path of the file containing the issue, relative to the repository root.
+            line: Exact 1-indexed line number where the issue occurs.
+            title: Short, specific name of the issue.
+            description: Detailed explanation of the defect and why it is a real problem.
+            severity: One of "critical", "high", "medium", or "low".
+            confidence: How certain you are the issue is real. One of "high", "medium", or "low".
+            category: Kind of issue, e.g. "bug", "security", "resource-leak", "race-condition", "performance", "correctness", or "api-misuse".
+            suggested_solution: Concrete minimal fix, ideally as a code snippet.
         """
+
+        # Normalize to a repo-relative, forward-slash path so agent findings dedupe against
+        # other scanners' findings, and reject paths outside the repository.
+        try:
+            # Agents often emit Windows-style backslashes; treat them as separators on any OS.
+            target = _resolve_within_root(filepath.replace("\\", "/"))
+        except ValueError as e:
+            return f"Error logging issue: {e}. Use a path relative to the repository root."
+        rel_path = target.relative_to(Path.cwd().resolve()).as_posix()
 
         try:
             with open(ledger_path, 'a', encoding='utf-8') as f:
                 f.write(json.dumps({
-                    "file": filepath,
+                    "file": rel_path,
                     "line": line,
                     "title": title,
                     "description": description,
@@ -191,9 +221,10 @@ def submit_verdict(is_genuine_bug: bool, reasoning: str, adjusted_severity: str)
     """
     Submits your final verdict on whether the reported bug is real.
     You must call this tool to complete the evaluation of the current finding.
-    
-    :param is_genuine_bug: True if it is a real bug, False if it is a false positive.
-    :param reasoning: A concise explanation of why it was kept or rejected.
-    :param adjusted_severity: Must be "critical", "high", "medium", or "low".
+
+    Args:
+        is_genuine_bug: true if it is a real bug, false if it is a false positive.
+        reasoning: A concise explanation of why it was kept or rejected.
+        adjusted_severity: One of "critical", "high", "medium", or "low".
     """
     return "Verdict received."

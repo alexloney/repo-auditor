@@ -162,3 +162,45 @@ def test_verify_findings_turn_limit_exhausted(critic_setup):
     assert len(results) == 1
     callbacks["on_warning"].assert_called_once()
     assert "Hit turn limit" in callbacks["on_warning"].call_args[0][0]
+
+# --- Verdict parsing / options ---
+
+def test_verify_findings_treats_string_false_as_rejection(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict",
+        tool_args={"is_genuine_bug": "false", "adjusted_severity": "low", "reasoning": "Not real"}
+    )
+
+    findings = [{"title": "Bogus", "file": "app.py", "severity": "high", "line": 1}]
+
+    assert verify_findings(mock_client, "model", tmp_path, findings, **callbacks) == []
+
+def test_verify_findings_ignores_invalid_adjusted_severity(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict",
+        tool_args={"is_genuine_bug": True, "adjusted_severity": "super-bad", "reasoning": "Real"}
+    )
+
+    findings = [{"title": "Leak", "file": "app.py", "severity": "high", "line": 1}]
+    results = verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
+
+    assert results[0]["severity"] == "high"
+
+def test_verify_findings_sets_context_window(critic_setup):
+    from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict",
+        tool_args={"is_genuine_bug": True, "adjusted_severity": "low", "reasoning": "Real"}
+    )
+
+    verify_findings(mock_client, "model", tmp_path, [{"title": "x", "file": "app.py", "line": 1}], **callbacks)
+
+    options = mock_client.chat.call_args.kwargs["options"]
+    assert options["num_ctx"] == MAX_CONTEXT
+    assert options["num_predict"] == OUTPUT_RESERVE

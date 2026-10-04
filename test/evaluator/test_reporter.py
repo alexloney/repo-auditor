@@ -99,3 +99,10 @@ def test_write_report_preserves_markdown_formatting(tmp_path):
     # Verify the solution is rendered exactly as provided, ticks and all
     expected_output = "**Suggested solution**\nAdd a guard clause:\n```python\ndef fixed(): pass\n```\n\n"
     assert expected_output in content
+def test_write_report_handles_null_suggested_solution(tmp_path):
+    report_path = tmp_path / "report.md"
+    findings = [{"title": "Bug", "severity": "low", "file": "a.py", "description": "d", "suggested_solution": None}]
+
+    write_report(tmp_path, report_path, findings)
+
+    assert "No fix provided." in report_path.read_text(encoding="utf-8")

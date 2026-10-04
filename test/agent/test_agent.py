@@ -189,7 +189,7 @@ def test_execute_tools_success():
     
     assert len(results) == 1
     assert results[0]["role"] == "tool"
-    assert results[0]["name"] == "dummy_add"
+    assert results[0]["tool_name"] == "dummy_add"
     assert results[0]["content"] == "5"
     mock_progress.assert_called_once_with(" > Executing: dummy_add({'a': 2, 'b': 3})")
 
