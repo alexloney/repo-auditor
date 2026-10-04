@@ -8,8 +8,10 @@ from auditor.agent.agent import (
     _chat_with_retries,
     run_agent_loop,
     MAX_CONSECUTIVE_ERRORS,
-    MAX_CONSECUTIVE_EMPTY
+    MAX_CONSECUTIVE_EMPTY,
+    LoopOutcome,
 )
+from auditor.agent.coverage import ReadCoverage
 
 # --- 1. Fixtures & Helpers ---
 
@@ -114,8 +116,9 @@ def test_run_agent_loop_immediate_stop(agent_setup):
     
     mock_client.chat.return_value = make_mock_response(content="Nothing to do. AUDIT_COMPLETE")
     
-    run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, **callbacks)
     
+    assert outcome == LoopOutcome.COMPLETED
     assert mock_client.chat.call_count == 1
     callbacks["on_progress"].assert_any_call("Agent: Nothing to do. AUDIT_COMPLETE")
 
@@ -128,7 +131,7 @@ def test_run_agent_loop_tool_execution(agent_setup):
         make_mock_response(content="Got it. AUDIT_COMPLETE")
     ]
 
-    run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, **callbacks)
 
     assert mock_client.chat.call_count == 2
     callbacks["on_progress"].assert_any_call(" > Executing: dummy_tool({'x': 'test'})")
@@ -143,10 +146,66 @@ def test_run_agent_loop_max_turns(agent_setup):
     
     mock_client.chat.return_value = make_mock_response(content="Still looking...")
     
-    run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, max_turns=3, **callbacks)
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, max_turns=3, **callbacks)
     
+    assert outcome == LoopOutcome.TURN_LIMIT
     assert mock_client.chat.call_count == 3
-    callbacks["on_warning"].assert_called_with("Reached the 3-turn limit; ending scan.")
+    callbacks["on_warning"].assert_called_with("Reached the 3-turn limit; stopping.")
+
+def test_run_agent_loop_is_done_callback(agent_setup):
+    """Verifies the loop stops as soon as is_done() reports True after a tool round."""
+    tmp_path, callbacks, tools, mock_client = agent_setup
+    done = []
+    def finish(x: str):
+        done.append(x)
+        return "ok"
+
+    mock_client.chat.return_value = make_mock_response(tool_calls=[make_mock_call("finish", {"x": "y"})])
+
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", [finish],
+                             stop_token=None, is_done=lambda: bool(done), **callbacks)
+
+    assert outcome == LoopOutcome.COMPLETED
+    assert mock_client.chat.call_count == 1
+
+def test_run_agent_loop_custom_nudge_and_no_stop_token(agent_setup):
+    """With stop_token=None, plain text never ends the loop and the custom nudge is sent."""
+    tmp_path, callbacks, tools, mock_client = agent_setup
+    mock_client.chat.return_value = make_mock_response(content="AUDIT_COMPLETE")
+
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, stop_token=None,
+                             nudge_message="Call the tool.", max_turns=2, **callbacks)
+
+    assert outcome == LoopOutcome.TURN_LIMIT
+    second_call_messages = mock_client.chat.call_args_list[1][1]["messages"]
+    assert second_call_messages[-1] == {"role": "user", "content": "Call the tool."}
+
+def test_run_agent_loop_retries_do_not_consume_turns(agent_setup):
+    """A failed request is retried without using up one of the max_turns."""
+    tmp_path, callbacks, tools, mock_client = agent_setup
+    mock_client.chat.side_effect = [
+        Exception("blip"),
+        make_mock_response(content="Done. AUDIT_COMPLETE"),
+    ]
+
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, max_turns=1, **callbacks)
+
+    assert outcome == LoopOutcome.COMPLETED
+
+def test_compaction_keeps_task_and_coverage():
+    """The post-compaction message restates the original task and the tracked coverage."""
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(content="- Looked around")
+    coverage = ReadCoverage()
+    coverage.record_full("src/a.py")
+
+    ctx = ConversationContext(mock_client, "model", "SYS", "Verify finding X", coverage)
+    ctx.append({"role": "assistant", "content": "Did some things."})
+    ctx.compact()
+
+    continuation = ctx.get_payload()[1]["content"]
+    assert "Verify finding X" in continuation
+    assert "- src/a.py (full)" in continuation
 
 # --- 4. Resilience & Error Recovery Tests ---
 
@@ -156,10 +215,11 @@ def test_run_agent_loop_api_crashes(agent_setup):
     
     mock_client.chat.side_effect = Exception("Connection Refused")
     
-    run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, **callbacks)
     
+    assert outcome == LoopOutcome.ABORTED
     assert mock_client.chat.call_count == MAX_CONSECUTIVE_ERRORS
-    callbacks["on_error"].assert_called_with("Giving up on this scan; findings so far are already saved.")
+    callbacks["on_error"].assert_called_with("Giving up after repeated request failures.")
 
 @patch("auditor.agent.agent.ConversationContext.compact")
 def test_run_agent_loop_empty_completions(mock_compact, agent_setup):
@@ -168,10 +228,10 @@ def test_run_agent_loop_empty_completions(mock_compact, agent_setup):
     
     mock_client.chat.return_value = make_mock_response(content="", done_reason="length")
     
-    run_agent_loop(mock_client, "model", tmp_path, tmp_path / "ledger.json", "sys", "user", tools, **callbacks)
+    outcome = run_agent_loop(mock_client, "model", "sys", "user", tools, **callbacks)
     
     assert mock_client.chat.call_count == MAX_CONSECUTIVE_EMPTY
-    callbacks["on_warning"].assert_called_with("Agent stopped producing output; ending scan.")
+    callbacks["on_warning"].assert_called_with("Agent stopped producing output; giving up.")
     assert mock_compact.call_count == MAX_CONSECUTIVE_EMPTY - 1
 
 # --- 5. Extracted Helper Tests ---

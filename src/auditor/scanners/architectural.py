@@ -1,6 +1,10 @@
 from .base import BaseScanner
 from ..agent.agent import run_agent_loop
-from ..agent.tools import read_file, read_file_range, make_report_issue_tool, make_list_files_tool, make_search_code_tool
+from ..agent.coverage import ReadCoverage
+from ..agent.tools import (
+    make_read_file_tool, make_read_file_range_tool, make_report_issue_tool,
+    make_list_files_tool, make_search_code_tool,
+)
 
 ARCHITECTURAL_SYSTEM_PROMPT = (
     "You are a meticulous principal software engineer conducting a deep integration and architectural audit of a repository. "
@@ -22,18 +26,24 @@ class ArchitecturalAgentScanner(BaseScanner):
     name = "Architectural Agentic Scan"
 
     def run(self) -> None:
-        report_issue = make_report_issue_tool(self.ledger_path)
-        list_files = make_list_files_tool(self.extensions, self.skip_dirs)
-        search_code = make_search_code_tool(self.extensions, self.skip_dirs)
+        root = self.target_dir
+        coverage = ReadCoverage()
+        tools = [
+            make_list_files_tool(root, self.extensions, self.skip_dirs),
+            make_read_file_tool(root, coverage),
+            make_read_file_range_tool(root, coverage),
+            make_search_code_tool(root, self.extensions, self.skip_dirs),
+            make_report_issue_tool(root, self.ledger_path),
+        ]
 
         run_agent_loop(
             client=self.client,
             model=self.model,
-            target_dir=self.target_dir,
-            ledger_path=self.ledger_path,
             system_prompt=ARCHITECTURAL_SYSTEM_PROMPT,
-            initial_user_prompt="Begin the audit. Please list the files in the current directory.",
-            tools=[list_files, read_file, read_file_range, search_code, report_issue],
+            initial_user_prompt="Begin the audit. Please list the files in the repository root ('.').",
+            tools=tools,
+            max_turns=self.max_turns,
+            coverage=coverage,
             on_progress=self.on_progress,
             on_warning=self.on_warning,
             on_error=self.on_error,

@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from .base import BaseScanner
 from ..utils.filesystem import list_auditable_files, number_lines, append_finding
@@ -16,47 +15,63 @@ SINGLE_FILE_PROMPT = (
     "Return ONLY the JSON object. If no definitive localized bugs exist, return {\"findings\": []}."
 )
 
-SINGLE_FILE_FINDINGS_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "findings": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string", "description": "Short, specific name of the bug."},
-                    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
-                    "category": {
-                        "type": "string",
-                        "enum": [
-                            "bug", "security", "resource-leak", "race-condition",
-                            "performance", "correctness", "api-misuse", "other",
-                        ],
-                    },
-                    "file": {"type": "string"},
-                    "line": {"type": ["integer", "null"], "description": "1-indexed line from the provided snippet."},
-                    "confidence": {
-                        "type": "string",
-                        "enum": ["high", "medium", "low"],
-                        "description": "Must be 'low' if the bug depends on the behavior or existence of external files/functions not visible in this snippet.",
-                    },
-                    "description": {"type": "string", "description": "Precise explanation of the defect."},
-                    "steps_to_reproduce": {"type": ["string", "null"]},
-                    "suggested_solution": {"type": "string", "description": "Concrete minimal fix (code snippet)."},
-                },
-                "required": [
-                    "title", "severity", "category", "file",
-                    "description", "confidence", "suggested_solution",
-                ],
-            },
-        },
+FINDING_PROPERTIES = {
+    "title": {"type": "string", "description": "Short, specific name of the bug."},
+    "severity": {"type": "string", "enum": ["critical", "high", "medium", "low"]},
+    "category": {
+        "type": "string",
+        "enum": [
+            "bug", "security", "resource-leak", "race-condition",
+            "performance", "correctness", "api-misuse", "other",
+        ],
     },
-    "required": ["findings"],
+    "file": {"type": "string"},
+    "line": {"type": ["integer", "null"], "description": "1-indexed line from the provided snippet."},
+    "confidence": {
+        "type": "string",
+        "enum": ["high", "medium", "low"],
+        "description": "Must be 'low' if the bug depends on the behavior or existence of external files/functions not visible in this snippet.",
+    },
+    "description": {"type": "string", "description": "Precise explanation of the defect."},
+    "steps_to_reproduce": {"type": ["string", "null"]},
+    "suggested_solution": {"type": "string", "description": "Concrete minimal fix (code snippet)."},
 }
 
+FINDING_REQUIRED = [
+    "title", "severity", "category", "file",
+    "description", "confidence", "suggested_solution",
+]
+
+def make_findings_schema(extra_properties: dict | None = None, extra_required: list[str] | None = None) -> dict:
+    """Builds the {"findings": [...]} response schema, optionally with scanner-specific finding fields."""
+    return {
+        "type": "object",
+        "properties": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {**FINDING_PROPERTIES, **(extra_properties or {})},
+                    "required": FINDING_REQUIRED + list(extra_required or []),
+                },
+            },
+        },
+        "required": ["findings"],
+    }
+
+SINGLE_FILE_FINDINGS_SCHEMA = make_findings_schema()
+
 class SingleFileScanner(BaseScanner):
+    """Reviews each auditable file in isolation with one structured-output LLM call.
+
+    Subclasses customize the review by overriding the class attributes below.
+    """
     id = "single-file"
     name = "Single File Analysis"
+
+    SYSTEM_PROMPT: str = SINGLE_FILE_PROMPT
+    SCHEMA: dict = SINGLE_FILE_FINDINGS_SCHEMA
+    USER_INSTRUCTION: str = "Audit this file snippet for real, statically-justifiable bugs."
 
     def run(self) -> None:
 
@@ -82,13 +97,13 @@ class SingleFileScanner(BaseScanner):
                 f"Repo: {self.target_dir.name}\n"
                 f"File: {relpath}\n\n"
                 f"```{Path(relpath).suffix.lstrip('.')}\n{number_lines(content)}\n```\n\n"
-                f"Audit this file snippet for real, statically-justifiable bugs."
+                f"{self.USER_INSTRUCTION}"
             )
 
             # Call the LLM to generate a report over the file
             self.on_progress(f"reviewing {relpath} ({estimate_tokens(user)} tok in)")
             try:
-                data = call_json(self.client, self.model, SINGLE_FILE_PROMPT, user, SINGLE_FILE_FINDINGS_SCHEMA)
+                data = call_json(self.client, self.model, self.SYSTEM_PROMPT, user, self.SCHEMA)
             except Exception as e:
                 self.on_warning(f" ! {relpath}: review failed -> {e}")
                 continue

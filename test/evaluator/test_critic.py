@@ -3,6 +3,7 @@ from unittest.mock import MagicMock
 from pathlib import Path
 
 from auditor.evaluator.critic import verify_findings
+from auditor.agent.agent import MAX_CONSECUTIVE_ERRORS
 
 # --- Helper to generate mock LLM responses ---
 def make_mock_response(tool_name=None, tool_args=None, plain_text=""):
@@ -141,10 +142,10 @@ def test_verify_findings_handles_llm_crash(critic_setup):
     
     results = verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
     
-    # Keeps the finding by default if verification fails mechanically
+    # Retries via the shared agent loop, then keeps the finding by default
+    assert mock_client.chat.call_count == MAX_CONSECUTIVE_ERRORS
     assert len(results) == 1
-    callbacks["on_warning"].assert_called_once()
-    assert "Critic call failed" in callbacks["on_warning"].call_args[0][0]
+    assert "No verdict reached (aborted)" in callbacks["on_warning"].call_args[0][0]
 
 def test_verify_findings_turn_limit_exhausted(critic_setup):
     tmp_path, callbacks = critic_setup
@@ -160,8 +161,7 @@ def test_verify_findings_turn_limit_exhausted(critic_setup):
     # Exhausts 10 turns, keeps the finding, warns the user
     assert mock_client.chat.call_count == 10
     assert len(results) == 1
-    callbacks["on_warning"].assert_called_once()
-    assert "Hit turn limit" in callbacks["on_warning"].call_args[0][0]
+    assert "No verdict reached (turn_limit)" in callbacks["on_warning"].call_args[0][0]
 
 # --- Verdict parsing / options ---
 
@@ -204,3 +204,28 @@ def test_verify_findings_sets_context_window(critic_setup):
     options = mock_client.chat.call_args.kwargs["options"]
     assert options["num_ctx"] == MAX_CONTEXT
     assert options["num_predict"] == OUTPUT_RESERVE
+
+def test_verify_findings_rejection_without_severity(critic_setup):
+    """A rejection may omit adjusted_severity; the tool must still accept it."""
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict",
+        tool_args={"is_genuine_bug": False, "reasoning": "Nope"}
+    )
+
+    findings = [{"title": "x", "file": "app.py", "severity": "high", "line": 1}]
+
+    assert verify_findings(mock_client, "model", tmp_path, findings, **callbacks) == []
+    assert mock_client.chat.call_count == 1
+
+def test_verify_findings_interrupt_keeps_remaining(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = KeyboardInterrupt
+
+    findings = [{"title": f"f{i}", "file": "app.py", "line": 1} for i in range(3)]
+    results = verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
+
+    assert results == findings
+    assert mock_client.chat.call_count == 1

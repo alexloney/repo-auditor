@@ -3,6 +3,7 @@ import importlib
 import sys
 from pathlib import Path
 from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners
+from auditor.agent.agent import DEFAULT_MAX_TURNS
 
 DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
 
@@ -22,6 +23,7 @@ def parse_args(args=None):
     parser.add_argument("--ledger", type=str, help="Specify the ledger file to use for scanning. Default: findings.json", default="findings.json")
     parser.add_argument("--report", type=str, help="Specify the report file to use for scanning. Default: report.md", default="report.md")
     parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit. Default: all supported extensions.", default=",".join(DEFAULT_EXTENSION))
+    parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help=f"Maximum model turns for agentic scanners (retries don't count). Default: {DEFAULT_MAX_TURNS}")
     parser.add_argument("--skip-dirs", type=str, help="Comma-separated list of directories to skip during the audit.", default=",".join(DEFAULT_SKIP_DIRS))
     
     parsed = parser.parse_args(args)
@@ -86,6 +88,7 @@ def main(args=None):
     print(f"Directories to skip: {parsed_args.skip_dirs if parsed_args.skip_dirs else 'default skip dirs'}")
     print(f"Ledger file: {parsed_args.ledger}")
     print(f"Report file: {parsed_args.report}")
+    print(f"Max agent turns: {parsed_args.max_turns}")
 
     return execute_audit(
         target_dir=target,
@@ -96,6 +99,7 @@ def main(args=None):
         report_file=parsed_args.report,
         extensions=parsed_args.extensions if parsed_args.extensions else None,
         skip_dirs=parsed_args.skip_dirs if parsed_args.skip_dirs else None,
+        max_turns=parsed_args.max_turns,
         on_progress=lambda msg: print(f"{msg}"),
         on_warning=lambda msg: print(f"{msg}"),
         on_error=lambda msg: print(f"{msg}"),

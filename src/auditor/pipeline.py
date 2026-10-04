@@ -8,6 +8,7 @@ from pathlib import Path
 
 from auditor import scanners
 from auditor.scanners.base import BaseScanner
+from auditor.agent.agent import DEFAULT_MAX_TURNS
 from auditor.evaluator.dedupe import dedupe_findings
 from auditor.evaluator.critic import verify_findings  
 from auditor.evaluator.reporter import write_report
@@ -24,9 +25,13 @@ def get_available_scanners() -> dict[str, type[BaseScanner]]:
     for _, module_name, _ in pkgutil.iter_modules(scanners.__path__):
         module = importlib.import_module(f"auditor.scanners.{module_name}")
         
-        # Find classes that inherit from BaseScanner (but ignore the base class itself)
+        # Find concrete BaseScanner subclasses *defined* in this module. Classes merely imported
+        # into it (e.g. a parent scanner being subclassed) are registered by their own module,
+        # so their auto_enabled flag comes from the right filename.
         for _, obj in inspect.getmembers(module, inspect.isclass):
-            if issubclass(obj, BaseScanner) and obj is not BaseScanner:
+            if (issubclass(obj, BaseScanner)
+                    and obj.__module__ == module.__name__
+                    and not inspect.isabstract(obj)):
                 obj.auto_enabled = not module_name.startswith("_")
                 registry[obj.id] = obj
                 
@@ -54,6 +59,7 @@ def execute_audit(target_dir: Path,
                   report_file: str,
                   extensions: list[str] | None = None,
                   skip_dirs: list[str] | None = None,
+                  max_turns: int = DEFAULT_MAX_TURNS,
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
                   on_error: Callable[[str], None] = None) -> int:
@@ -79,6 +85,7 @@ def execute_audit(target_dir: Path,
             ledger_path=ledger_path,
             extensions=extensions,
             skip_dirs=skip_dirs,
+            max_turns=max_turns,
             on_progress=lambda msg: on_progress_noop(f"  [{scanner_class.name}] {msg}"),
             on_warning=lambda msg: on_warning_noop(f"  [{scanner_class.name}] {msg}"),
             on_error=lambda msg: on_error_noop(f"  [{scanner_class.name}] {msg}"),

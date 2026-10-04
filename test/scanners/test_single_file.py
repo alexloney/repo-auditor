@@ -116,3 +116,30 @@ def test_single_file_scanner_no_findings(mock_append, mock_call_json, mock_list_
     
     # Assertions
     mock_append.assert_not_called()
+
+@patch("auditor.scanners.single_file.list_auditable_files")
+@patch("auditor.scanners.single_file.call_json")
+@patch("auditor.scanners.single_file.append_finding")
+def test_owasp_scanner_uses_its_own_prompt_and_schema(mock_append, mock_call_json, mock_list_files, tmp_path):
+    from auditor.scanners.owasp import OwaspScanner, OWASP_SYSTEM_PROMPT
+
+    (tmp_path / "app.py").write_text("print('hello')", encoding="utf-8")
+    mock_list_files.return_value = ["app.py"]
+    mock_call_json.return_value = {"findings": []}
+
+    OwaspScanner(client=MagicMock(), model="m", target_dir=tmp_path, ledger_path=tmp_path / "l.json").run()
+
+    _, _, system, user, schema = mock_call_json.call_args[0]
+    assert system == OWASP_SYSTEM_PROMPT
+    assert "OWASP Top 10" in user
+    item = schema["properties"]["findings"]["items"]
+    assert {"owasp_category", "vuln_class"} <= set(item["properties"])
+    assert {"owasp_category", "vuln_class", "title"} <= set(item["required"])
+
+def test_single_file_schema_unchanged_by_subclass():
+    from auditor.scanners.single_file import SINGLE_FILE_FINDINGS_SCHEMA
+    import auditor.scanners.owasp  # noqa: F401  (building its schema must not mutate the base one)
+
+    item = SINGLE_FILE_FINDINGS_SCHEMA["properties"]["findings"]["items"]
+    assert "owasp_category" not in item["properties"]
+    assert "owasp_category" not in item["required"]

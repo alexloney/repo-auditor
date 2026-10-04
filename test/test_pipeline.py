@@ -62,3 +62,11 @@ def test_filter_scanners_ignores_missing_ids():
     assert len(results) == 1
     assert registry["shallow"] in results
     assert len(skipped) == 0
+
+def test_get_available_scanners_registers_classes_from_defining_module():
+    """owasp.py imports SingleFileScanner to subclass it; it must not re-register it."""
+    registry = get_available_scanners()
+
+    assert registry["single-file"].__module__ == "auditor.scanners.single_file"
+    assert registry["owasp"].__module__ == "auditor.scanners.owasp"
+    assert registry["single-file"].auto_enabled is True

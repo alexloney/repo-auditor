@@ -111,3 +111,13 @@ def test_main_rejects_unknown_scanner(mock_get_scanners, mock_execute, tmp_path,
     assert main([str(tmp_path), "--scans", "single-file,typo"]) == 1
     assert "Unknown scanner(s): typo" in capsys.readouterr().out
     mock_execute.assert_not_called()
+
+def test_parse_args_max_turns():
+    from auditor.agent.agent import DEFAULT_MAX_TURNS
+    assert parse_args(["/fake/repo"]).max_turns == DEFAULT_MAX_TURNS
+    assert parse_args(["/fake/repo", "--max-turns", "250"]).max_turns == 250
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_max_turns(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "arch", "--max-turns", "7"])
+    assert mock_execute.call_args.kwargs["max_turns"] == 7
