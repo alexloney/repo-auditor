@@ -1,196 +1,290 @@
-import os
-from pathlib import Path
+import logging
+from enum import Enum
 from typing import Callable
 from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens
-
+from auditor.agent.coverage import ReadCoverage
 
 CONTEXT_SAFETY_MARGIN = 0.6
 MAX_HISTORY_MESSAGES = 200
 MAX_CONSECUTIVE_EMPTY = 3
 MAX_CONSECUTIVE_ERRORS = 3
+DEFAULT_MAX_TURNS = 100
 
-def _compaction_threshold() -> float:
-    return (MAX_CONTEXT - OUTPUT_RESERVE) * CONTEXT_SAFETY_MARGIN
+logger = logging.getLogger(__name__)
 
-def _message_parts(m):
-    if isinstance(m, dict):
-        return m.get("role", ""), (m.get("content") or ""), (m.get("tool_calls") or [])
-    return getattr(m, "role", ""), (getattr(m, "content", "") or ""), (getattr(m, "tool_calls", None) or [])
+class LoopOutcome(str, Enum):
+    COMPLETED = "completed"      # stop token emitted or is_done() returned True
+    TURN_LIMIT = "turn_limit"    # ran out of turns
+    ABORTED = "aborted"          # too many consecutive request failures / empty completions
+    INTERRUPTED = "interrupted"  # Ctrl+C
 
-def _conversation_tokens(messages) -> int:
-    total = 0
-    for m in messages:
-        _role, content, calls = _message_parts(m)
-        total += estimate_tokens(content)
+class ConversationContext:
+    """Encapsulates message history, token estimation, and context compaction."""
+
+    def __init__(self, client, model: str, system_prompt: str, initial_user_prompt: str,
+                 coverage: ReadCoverage | None = None):
+        self.client = client
+        self.model = model
+        self.system_prompt = system_prompt
+        self.initial_user_prompt = initial_user_prompt
+        self.coverage = coverage
+        self.safety_margin = CONTEXT_SAFETY_MARGIN
+        self.max_history = MAX_HISTORY_MESSAGES
+        self.messages: list = []
+        self._token_count = 0
+        self.extend([
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": initial_user_prompt},
+        ])
+
+    @property
+    def token_count(self) -> int:
+        # Maintained incrementally by append/extend/compact, so the history is never re-tokenized.
+        return self._token_count
+
+    def _estimate_message(self, m) -> int:
+        _, content, calls = self._message_parts(m)
+        total = estimate_tokens(content)
+        # Thinking models' reasoning is sent back with the assistant message, so it costs context too.
+        total += estimate_tokens(self._get(m, "thinking") or "")
         # Tool-call messages carry empty content but their arguments still cost tokens.
         for call in calls:
             total += estimate_tokens(str(call))
-    return total
+        return total
 
-def _history_digest(messages, max_entries: int = 120) -> str:
-    """Condenses the conversation into a short action log of tool calls and agent notes."""
-    lines = []
-    for m in messages:
-        role, content, calls = _message_parts(m)
-        for call in calls:
-            lines.append(f"- called {call.function.name}({call.function.arguments})")
-        if role == "assistant" and content.strip() and not calls:
-            lines.append(f"- noted: {content.strip()[:200]}")
-    return "\n".join(lines[-max_entries:])
+    @property
+    def is_full(self) -> bool:
+        threshold = (MAX_CONTEXT - OUTPUT_RESERVE) * self.safety_margin
+        return len(self.messages) > self.max_history or self.token_count > threshold
 
-def _compact_history(client, model: str, system_prompt: str, messages: list) -> list:
-    """Summarizes progress from a small digest, then rebuilds a short history around it.
+    def append(self, message) -> None:
+        self.messages.append(message)
+        self._token_count += self._estimate_message(message)
 
-    The digest matters: summarizing the raw history would resend the very payload that
-    overflowed the context, reproducing the failure it is meant to fix.
-    """
-    digest = _history_digest(messages)
-    summary = ""
-    if digest:
-        try:
-            response = client.chat(
-                model=model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": (
-                        "Context is running low, so your history is being compacted. Below is the log "
-                        "of actions you have taken so far.\n\n"
-                        f"{digest}\n\n"
-                        "Summarize in a few concise bullet points: which directories/files you have "
-                        "already examined, what still needs review, and any suspicious areas worth "
-                        "revisiting. Do not call any tools; reply with plain text only."
-                    )},
-                ],
-                options={"temperature": 0.0, "num_ctx": MAX_CONTEXT, "num_predict": OUTPUT_RESERVE},
+    def extend(self, messages) -> None:
+        for message in messages:
+            self.append(message)
+
+    def get_payload(self) -> list:
+        return self.messages
+
+    def compact(self) -> None:
+        """Summarizes progress from a small digest, then rebuilds a short history around it.
+
+        The digest matters: summarizing the raw history would resend the very payload that
+        overflowed the context, reproducing the failure it is meant to fix.
+        """
+        digest = self._history_digest()
+        summary = ""
+
+        if digest:
+            try:
+                response = self.client.chat(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": self.system_prompt},
+                        {"role": "user", "content": (
+                            "Context is running low, so your history is being compacted. Below is the log "
+                            "of actions you have taken so far.\n\n"
+                            f"{digest}\n\n"
+                            "Summarize in a few concise bullet points: which directories/files you have "
+                            "already examined, what still needs review, and any suspicious areas worth "
+                            "revisiting. Do not call any tools; reply with plain text only."
+                        )},
+                    ],
+                    options={"temperature": 0.0, "num_ctx": MAX_CONTEXT, "num_predict": OUTPUT_RESERVE},
+                )
+                summary = (response.message.content or "").strip()
+            except Exception as e:
+                logger.warning("History summarization failed, falling back to raw action log: %s", e)
+
+        if not summary:
+            summary = digest or "(no actions recorded)"
+
+        # The coverage list comes from the read tools themselves, so unlike the summary
+        # it is exact and can't be lost or hallucinated by the model.
+        coverage_section = ""
+        if self.coverage is not None and len(self.coverage):
+            coverage_section = (
+                "Files you have already read (tracked automatically):\n"
+                f"{self.coverage.summary()}\n\n"
             )
-            summary = (response.message.content or "").strip()
-        except Exception as e:
-            print(f"    ! History summarization failed, falling back to the raw action log: {e}")
 
-    if not summary:
-        summary = digest or "(no actions recorded)"
+        continuation = (
+            "Your conversation history was compacted to save memory. Anything you already "
+            "reported or submitted is safely saved.\n\n"
+            f"Your original task:\n{self.initial_user_prompt}\n\n"
+            f"Summary of your progress so far:\n{summary}\n\n"
+            f"{coverage_section}"
+            "Continue from here, avoiding files you've already covered unless you need to "
+            "re-check something specific."
+        )
 
-    continuation = (
-        "Your conversation history was compacted to save memory. Your reported issues are safely "
-        f"saved to disk. Here is a summary of your progress so far:\n\n{summary}\n\n"
-        "Continue the audit from here, avoiding files you've already covered."
-    )
+        self.messages = []
+        self._token_count = 0
+        self.extend([
+            {"role": "system", "content": self.system_prompt},
+            {"role": "user", "content": continuation},
+        ])
 
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": continuation},
-    ]
+    @staticmethod
+    def _get(m, key):
+        """Reads a field from either a plain dict message or an ollama Message object."""
+        return m.get(key) if isinstance(m, dict) else getattr(m, key, None)
+
+    def _message_parts(self, m) -> tuple:
+        return self._get(m, "role") or "", self._get(m, "content") or "", self._get(m, "tool_calls") or []
+
+    def _history_digest(self, max_entries: int = 120) -> str:
+        """Condenses the conversation into a short action log of tool calls and agent notes."""
+        lines = []
+        for m in self.messages:
+            role, content, calls = self._message_parts(m)
+            for call in calls:
+                lines.append(f"- called {call.function.name}({call.function.arguments})")
+            if role == "assistant" and content.strip() and not calls:
+                lines.append(f"- noted: {content.strip()[:200]}")
+        return "\n".join(lines[-max_entries:])
+
+def _execute_tools(tool_calls: list, available_tools: dict, on_progress: Callable[[str], None]) -> list:
+    """Executes a list of tool calls and returns the resulting message dictionaries."""
+    results = []
+    for call in tool_calls:
+        func_name = call.function.name
+        args = call.function.arguments
+
+        on_progress(f" > Executing: {func_name}({args})")
+
+        if func_name in available_tools:
+            try:
+                result_str = str(available_tools[func_name](**args))
+            except Exception as e:
+                result_str = f"Execution error: {e}"
+        else:
+            result_str = f"Error: Tool {func_name} not found."
+
+        results.append({
+            "role": "tool",
+            "content": result_str,
+            "tool_name": func_name,
+        })
+    return results
+
+def _chat_with_retries(
+    ctx: ConversationContext, tools: list, error_state: dict,
+    on_warning: Callable[[str], None], on_error: Callable[[str], None]
+):
+    """
+    Attempts an LLM chat call, handling API errors and empty completions.
+    Returns a tuple of (msg, status). Status is "success", "retry", or "abort".
+    """
+    try:
+        response = ctx.client.chat(
+            model=ctx.model,
+            messages=ctx.get_payload(),
+            tools=tools,
+            options={
+                "temperature": 0.0,
+                "num_ctx": MAX_CONTEXT,
+                "num_predict": OUTPUT_RESERVE,
+            },
+        )
+    except Exception as e:
+        error_state["errors"] += 1
+        on_warning(f"Chat request failed ({error_state['errors']}/{MAX_CONSECUTIVE_ERRORS}): {e}")
+        if error_state["errors"] >= MAX_CONSECUTIVE_ERRORS:
+            on_error("Giving up after repeated request failures.")
+            return None, "abort"
+
+        ctx.compact()
+        return None, "retry"
+
+    error_state["errors"] = 0
+    msg = response.message
+
+    if not getattr(msg, "tool_calls", None) and not (msg.content or "").strip():
+        error_state["empty"] += 1
+        reason = getattr(response, "done_reason", "unknown")
+        on_warning(f"Empty completion ({error_state['empty']}/{MAX_CONSECUTIVE_EMPTY}, done_reason={reason})")
+        if error_state["empty"] >= MAX_CONSECUTIVE_EMPTY:
+            on_warning("Agent stopped producing output; giving up.")
+            return None, "abort"
+
+        ctx.compact()
+        return None, "retry"
+
+    error_state["empty"] = 0
+    return msg, "success"
 
 def run_agent_loop(
     client,
     model: str,
-    target_dir: Path,
-    ledger_path: Path,
     system_prompt: str,
     initial_user_prompt: str,
     tools: list,
-    stop_token: str = "AUDIT_COMPLETE",
-    max_turns: int = 50,
+    stop_token: str | None = "AUDIT_COMPLETE",
+    is_done: Callable[[], bool] | None = None,
+    nudge_message: str | None = None,
+    max_turns: int = DEFAULT_MAX_TURNS,
+    coverage: ReadCoverage | None = None,
     on_progress: Callable[[str], None] = None,
     on_warning: Callable[[str], None] = None,
     on_error: Callable[[str], None] = None
-) -> None:
-    """Drives a tool-calling agent against target_dir until it emits stop_token or runs out of turns."""
-    original_dir = os.getcwd()
-    os.chdir(target_dir)
+) -> LoopOutcome:
+    """Drives a tool-calling agent until it finishes or runs out of turns.
 
-    messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": initial_user_prompt},
-    ]
+    The loop finishes when the agent replies with `stop_token` in plain text, or when
+    `is_done()` returns True after a round of tool calls (e.g. a verdict tool was called).
+    Plain-text replies that don't finish the loop are answered with `nudge_message`.
+
+    Only successful model responses count as turns; retries after request failures or
+    empty completions are bounded separately by MAX_CONSECUTIVE_ERRORS / MAX_CONSECUTIVE_EMPTY.
+    """
+    on_progress = on_progress or (lambda _: None)
+    on_warning = on_warning or (lambda _: None)
+    on_error = on_error or (lambda _: None)
+    if nudge_message is None:
+        nudge_message = f"Continue the audit, or reply {stop_token} if you are done."
+
+    ctx = ConversationContext(client, model, system_prompt, initial_user_prompt, coverage)
     available_tools = {t.__name__: t for t in tools}
+    error_state = {"errors": 0, "empty": 0}
 
     on_progress(f"Booting agent loop with {model}...")
 
     try:
-        consecutive_empty = 0
-        consecutive_errors = 0
-        for _turn in range(max_turns):
-            if (len(messages) > MAX_HISTORY_MESSAGES
-                    or _conversation_tokens(messages) > _compaction_threshold()):
-                messages = _compact_history(client, model, system_prompt, messages)
+        turns = 0
+        while turns < max_turns:
+            if ctx.is_full:
+                ctx.compact()
 
-            try:
-                response = client.chat(
-                    model=model,
-                    messages=messages,
-                    tools=tools,
-                    options={
-                        "temperature": 0.0,
-                        "num_ctx": MAX_CONTEXT,
-                        "num_predict": OUTPUT_RESERVE,
-                    },
-                )
-            except Exception as e:
-                consecutive_errors += 1
-                on_warning(f"Chat request failed ({consecutive_errors}/{MAX_CONSECUTIVE_ERRORS}): {e}")
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS:
-                    on_error(f"Giving up on this scan; findings so far are already saved.")
-                    break
-                # Usually the prompt overran num_ctx, so shrink it and try again.
-                messages = _compact_history(client, model, system_prompt, messages)
+            msg, status = _chat_with_retries(ctx, tools, error_state, on_warning, on_error)
+
+            if status == "abort":
+                return LoopOutcome.ABORTED
+            if status == "retry":
                 continue
+            turns += 1
 
-            consecutive_errors = 0
-            msg = response.message
-
-            if not getattr(msg, "tool_calls", None):
+            if getattr(msg, "tool_calls", None):
+                ctx.append(msg)
+                tool_results = _execute_tools(msg.tool_calls, available_tools, on_progress)
+                ctx.extend(tool_results)
+                if is_done is not None and is_done():
+                    return LoopOutcome.COMPLETED
+            else:
                 content = (msg.content or "").strip()
-
-                if not content:
-                    consecutive_empty += 1
-                    reason = getattr(response, "done_reason", "unknown")
-                    on_warning(f"Empty completion ({consecutive_empty}/{MAX_CONSECUTIVE_EMPTY}, done_reason={reason})")
-                    if consecutive_empty >= MAX_CONSECUTIVE_EMPTY:
-                        on_warning(f"Agent stopped producing output; ending scan.")
-                        break
-                    # Most often the context is exhausted, so reclaim room and retry.
-                    messages = _compact_history(client, model, system_prompt, messages)
-                    continue
-
-                consecutive_empty = 0
                 on_progress(f"Agent: {content}")
-                if stop_token in content:
-                    break
-                messages.append(msg)
-                # Keep the conversation ending on a user turn so the next request is well-formed.
-                messages.append({
-                    "role": "user",
-                    "content": f"Continue the audit, or reply {stop_token} if you are done.",
-                })
-                continue
 
-            consecutive_empty = 0
-            messages.append(msg)
+                if stop_token and stop_token in content:
+                    return LoopOutcome.COMPLETED
 
-            for call in msg.tool_calls:
-                func_name = call.function.name
-                args = call.function.arguments
+                ctx.append(msg)
+                ctx.append({"role": "user", "content": nudge_message})
 
-                on_progress(f" > Executing: {func_name}({args})")
-
-                if func_name in available_tools:
-                    try:
-                        result = available_tools[func_name](**args)
-                    except Exception as e:
-                        result = f"Execution error: {e}"
-                else:
-                    result = f"Error: Tool {func_name} not found."
-
-                messages.append({
-                    "role": "tool",
-                    "content": str(result),
-                    "name": func_name,
-                })
-        else:
-            on_warning(f"Reached the {max_turns}-turn limit; ending scan.")
+        on_warning(f"Reached the {max_turns}-turn limit; stopping.")
+        return LoopOutcome.TURN_LIMIT
 
     except KeyboardInterrupt:
-        on_warning(f"Aborted by user.")
-    finally:
-        os.chdir(original_dir)
+        on_warning("Aborted by user.")
+        return LoopOutcome.INTERRUPTED

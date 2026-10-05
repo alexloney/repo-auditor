@@ -11,8 +11,10 @@ from auditor.utils.llm import (
 )
 
 def test_estimate_tokens():
-    # Verify tiktoken is correctly encoding and returning a positive integer
-    assert estimate_tokens("def hello(): pass") > 0
+    assert estimate_tokens("") == 0
+    # Rounds up, so even one character costs a token
+    assert estimate_tokens("x") == 1
+    assert estimate_tokens("def hello(): pass") == 6  # 17 chars / 3, rounded up
 
 def test_input_budget():
     assert input_budget() == MAX_CONTEXT - OUTPUT_RESERVE

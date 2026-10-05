@@ -25,3 +25,9 @@ coverage.txt
 dist/
 build/
 *.egg-info/
+.venv/
+
+# Audit run outputs (written to the current directory by default)
+/findings.json
+/oldfindings.json
+/report.md

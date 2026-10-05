@@ -1,11 +1,8 @@
-import os
 from pathlib import Path
 from datetime import datetime
-import json
 
-def write_report(target_dir: Path, findings: list) -> None:
+def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
     """Formats verified findings into a Markdown file."""
-    report_path = target_dir / "report.md"
     
     sev_counts = {}
     for f_ in findings:
@@ -33,7 +30,7 @@ def write_report(target_dir: Path, findings: list) -> None:
             vuln = f" · **Class:** {f.get('vuln_class')}" if f.get("vuln_class") else ""
             
             # Remove the stripping logic, just ensure it isn't empty
-            fix = f.get('suggested_solution', 'No fix provided.').strip()
+            fix = (f.get('suggested_solution') or '').strip() or 'No fix provided.'
 
             body.append(
                 f"### {f.get('title', 'Untitled Finding')}\n"

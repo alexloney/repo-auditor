@@ -2,6 +2,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 from auditor.cli import main, parse_args, list_scanners
 
+def test_parse_args_list():
+    args = parse_args(["--list"])
+    assert args.list is True
+
 def test_parse_args_with_target():
     args = parse_args(["/fake/repo"])
     assert args.repo_path == "/fake/repo"
@@ -94,3 +98,26 @@ def test_list_scanners(mock_get_scanners, capsys):
     assert "Shallow Syntax Scan" in output
     assert "_taint" in output
     assert "(disabled: module name starts with '_')" in output
+
+def test_main_rejects_missing_target(tmp_path, capsys):
+    assert main([str(tmp_path / "does-not-exist")]) == 1
+    assert "does not exist" in capsys.readouterr().out
+
+@patch("auditor.cli.execute_audit")
+@patch("auditor.cli.get_available_scanners")
+def test_main_rejects_unknown_scanner(mock_get_scanners, mock_execute, tmp_path, capsys):
+    mock_get_scanners.return_value = {"single-file": MagicMock(auto_enabled=True)}
+
+    assert main([str(tmp_path), "--scans", "single-file,typo"]) == 1
+    assert "Unknown scanner(s): typo" in capsys.readouterr().out
+    mock_execute.assert_not_called()
+
+def test_parse_args_max_turns():
+    from auditor.agent.agent import DEFAULT_MAX_TURNS
+    assert parse_args(["/fake/repo"]).max_turns == DEFAULT_MAX_TURNS
+    assert parse_args(["/fake/repo", "--max-turns", "250"]).max_turns == 250
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_max_turns(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "arch", "--max-turns", "7"])
+    assert mock_execute.call_args.kwargs["max_turns"] == 7
