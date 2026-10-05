@@ -17,16 +17,16 @@ OWASP_SYSTEM_PROMPT = (
 )
 
 OWASP_CATEGORIES = [
-    "A01:2021 Broken Access Control",
-    "A02:2021 Cryptographic Failures",
-    "A03:2021 Injection",
-    "A04:2021 Insecure Design",
-    "A05:2021 Security Misconfiguration",
-    "A06:2021 Vulnerable and Outdated Components",
-    "A07:2021 Identification and Authentication Failures",
-    "A08:2021 Software and Data Integrity Failures",
-    "A09:2021 Security Logging and Monitoring Failures",
-    "A10:2021 Server-Side Request Forgery",
+    "A01:2021-Broken Access Control",
+    "A02:2021-Cryptographic Failures",
+    "A03:2021-Injection",
+    "A04:2021-Insecure Design",
+    "A05:2021-Security Misconfiguration",
+    "A06:2021-Vulnerable and Outdated Components",
+    "A07:2021-Identification and Authentication Failures",
+    "A08:2021-Software and Data Integrity Failures",
+    "A09:2021-Security Logging and Monitoring Failures",
+    "A10:2021-Server-Side Request Forgery",
 ]
 
 class OwaspScanner(SingleFileScanner):
@@ -35,8 +35,17 @@ class OwaspScanner(SingleFileScanner):
 
     SYSTEM_PROMPT = OWASP_SYSTEM_PROMPT
     USER_INSTRUCTION = "Audit this file snippet for real, statically-justifiable OWASP Top 10 vulnerabilities."
+    # Every OWASP finding is a security finding, so don't make the model pick a category.
+    FINDING_DEFAULTS = {"category": "security"}
     SCHEMA = make_findings_schema(
+        exclude=("category",),
         extra_properties={
+            "description": {"type": "string", "description": "Precise explanation of the vulnerability and its impact."},
+            "confidence": {
+                "type": "string",
+                "enum": ["high", "medium", "low"],
+                "description": "Must be 'low' if exploitability depends on external files/config not visible in this snippet.",
+            },
             "owasp_category": {"type": "string", "enum": OWASP_CATEGORIES},
             "vuln_class": {
                 "type": "string",

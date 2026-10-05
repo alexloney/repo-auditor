@@ -137,7 +137,16 @@ be run explicitly with `--scans owasp`, and `--list` marks it as disabled.
 | --- | --- | --- | --- |
 | `single-file` | Single File Analysis | Per-file | Localized defects in one file at a time |
 | `owasp` | OWASP Top 10 Analysis | Per-file | OWASP Top 10 (2021) vulnerabilities |
+| `batch` | Batched Context Analysis | Per-batch | Defects between related files, reviewed together |
+| `memory` | Memory Corruption Deep Scan | Per-function | Buffer overflows, use-after-free and similar (C/C++ only) |
 | `arch` | Architectural Agentic Scan | Agentic | Cross-file and architectural defects |
+| `taint` | Injection & Traversal Taint Scan | Agentic | SQL injection, path traversal and command injection traced from source to sink |
+
+How they complement each other: `single-file` and `owasp` see one file with no outside context.
+`batch` adds the files each file imports or is imported by, while still covering every file.
+`arch` and `taint` can follow code anywhere in the repository, but the agent decides what to
+read, so they don't guarantee coverage. `memory` only runs on C-family sources and does nothing
+on other repositories.
 
 ### `single-file`
 
@@ -151,7 +160,36 @@ exist and behave correctly.
 Same mechanics as `single-file`, with a security prompt. Findings must map to an OWASP Top 10
 (2021) category. Generic logic bugs, style and performance issues are excluded unless they
 directly cause a vulnerability. Each finding carries an `owasp_category` (A01–A10) and a
-`vuln_class` (e.g. `SQL injection`, `CWE-79`).
+`vuln_class` (e.g. `SQL injection`, `CWE-79`). Findings are always tagged category `security`.
+
+### `batch`
+
+Reviews groups of up to 4 related files in one request, so the model can check the contracts
+between them: arguments, return values, shared state and resources.
+
+Files are grouped without any model calls. Each file is linked to the repository files that its
+`import`, `from`, `#include`, `require` or `use` lines refer to, by file name (or by directory
+name for `__init__.py`, `index.*` and similar). Linked files are grouped together, starting from
+the most-connected ones, within a 40,000-token budget per request. Files with no links are
+grouped with others in the same directory. Every non-empty file lands in exactly one batch.
+
+Findings attributed to a file that wasn't in the batch are dropped.
+
+### `memory`
+
+For C-family files (`.c .h .cpp .cc .cxx .hpp .hh .m .mm`, narrowed further by `--extensions`).
+Each file is split into individual functions, and up to 10 at a time are sent to the model with
+the file's top-of-file declarations (`#define`s, typedefs, structs), so real buffer sizes are
+visible. The prompt targets exactly: buffer overflows, out-of-bounds reads and writes,
+use-after-free, double-free, uninitialized memory, and integer overflow that leads to an
+undersized allocation. Findings carry a `vuln_class` and are tagged category `security`.
+
+Function extraction (`utils/code_units.py`) is structural rather than a real parser, because
+C/C++ parsers need each project's include paths and compiler flags. It matches braces on a copy
+of the source with comments and strings blanked out, and descends into
+`class`/`struct`/`namespace`/`extern "C"` blocks. On about 2,900 real C/C++ files it extracted
+roughly 34,000 functions, with the line numbers wrong for 0.2% of them. Those were mostly
+constructors that brace-initialize members (`buf{x}`) and macro-generated code.
 
 ### `arch`
 
@@ -163,6 +201,20 @@ replies `AUDIT_COMPLETE` or reaches `--max-turns`.
 When the conversation nears the context limit, the history is compacted into a summary. The
 agent is then reminded of its task and given the exact list of files and line ranges it has
 already read, which the read tools record as they go.
+
+### `taint`
+
+An agent that performs taint analysis across files for exactly three classes: **SQL injection**,
+**path traversal** and **command injection**. It works backwards from the dangerous call:
+
+1. `search_code` for candidate sinks (`execute(`, `os.system`, `shell=True`, `extractall`, …).
+2. Read the enclosing function to find which variable reaches the sink.
+3. Trace that variable backwards through assignments and call sites, across files, until it
+   reaches a constant, a sanitizer or parameterized API, or untrusted input.
+
+It only reports complete source-to-sink paths, with each hop in the description. This covers
+the case the per-file `owasp` scanner can't: untrusted input that enters in one file and reaches
+the sink in another.
 
 ---
 
@@ -213,7 +265,8 @@ dropped.
 | `description` | Explanation of the defect |
 | `steps_to_reproduce` | Optional |
 | `suggested_solution` | Concrete minimal fix |
-| `owasp_category`, `vuln_class` | Added by `owasp` |
+| `owasp_category` | Added by `owasp` (A01–A10:2021) |
+| `vuln_class` | Added by `owasp` (free text) and `memory` (`buffer-overflow`, `use-after-free`, …) |
 | `reviewer_notes` | Added by the critic |
 
 ---
@@ -360,7 +413,10 @@ src/auditor/
     base.py            BaseScanner
     single_file.py     Per-file scanner template and the single-file scanner
     owasp.py           OWASP Top 10 scanner (a SingleFileScanner subclass)
+    batch.py           Related files reviewed together, grouped by an import graph
+    memory.py          C/C++ memory-safety review, function by function
     architectural.py   Agentic cross-file scanner
+    taint.py           Agentic source-to-sink injection and traversal tracing
 
   evaluator/
     dedupe.py          Merges duplicate findings
@@ -370,6 +426,7 @@ src/auditor/
   utils/
     llm.py             Token estimate and schema-constrained calls with retries
     filesystem.py      File selection, line numbering and ledger writes
+    code_units.py      Splits C-family source into functions (for memory)
 
 test/                  pytest suite, mirroring src/auditor/
 ```
@@ -396,5 +453,7 @@ suite with coverage on Python 3.10–3.13.
   will contain false positives. Review before acting. An empty report is a legitimate result.
 - **Not deterministic.** Calls use temperature 0, but retries raise it, and model or server
   changes shift results.
-- **Sequential.** Scanners and files are processed one at a time, so a full run over a large
-  repository is slow. With `all`, every file is reviewed by both `single-file` and `owasp`.
+- **Slow with `all`.** Scanners and files are processed one at a time, and with `all` every file
+  is reviewed by `single-file`, `owasp` and `batch` (and by `memory` for C/C++), on top of the
+  two agentic scans. For faster runs, pick scanners with `--scans`, or prefix the modules you
+  don't want by default with `_`.

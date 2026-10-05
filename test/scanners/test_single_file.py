@@ -143,3 +143,23 @@ def test_single_file_schema_unchanged_by_subclass():
     item = SINGLE_FILE_FINDINGS_SCHEMA["properties"]["findings"]["items"]
     assert "owasp_category" not in item["properties"]
     assert "owasp_category" not in item["required"]
+    assert "category" in item["properties"]
+
+@patch("auditor.scanners.single_file.list_auditable_files")
+@patch("auditor.scanners.single_file.call_json")
+@patch("auditor.scanners.single_file.append_finding")
+def test_owasp_findings_are_tagged_security(mock_append, mock_call_json, mock_list_files, tmp_path):
+    from auditor.scanners.owasp import OwaspScanner
+
+    (tmp_path / "app.py").write_text("q = 'SELECT ' + x", encoding="utf-8")
+    mock_list_files.return_value = ["app.py"]
+    mock_call_json.return_value = {"findings": [{"title": "SQLi", "owasp_category": "A03:2021-Injection"}]}
+
+    OwaspScanner(client=MagicMock(), model="m", target_dir=tmp_path, ledger_path=tmp_path / "l.json").run()
+
+    finding = mock_append.call_args[0][1]
+    assert finding["category"] == "security"
+    assert finding["file"] == "app.py"
+    schema_item = mock_call_json.call_args[0][4]["properties"]["findings"]["items"]
+    assert "category" not in schema_item["properties"]
+    assert "category" not in schema_item["required"]

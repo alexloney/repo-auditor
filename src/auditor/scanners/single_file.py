@@ -42,8 +42,16 @@ FINDING_REQUIRED = [
     "description", "confidence", "suggested_solution",
 ]
 
-def make_findings_schema(extra_properties: dict | None = None, extra_required: list[str] | None = None) -> dict:
-    """Builds the {"findings": [...]} response schema, optionally with scanner-specific finding fields."""
+def make_findings_schema(extra_properties: dict | None = None,
+                         extra_required: list[str] | None = None,
+                         exclude: tuple[str, ...] = ()) -> dict:
+    """Builds the {"findings": [...]} response schema.
+
+    extra_properties adds scanner-specific fields or overrides the standard ones (e.g. to give
+    `description` scanner-specific guidance); exclude drops standard fields the model shouldn't fill.
+    """
+    properties = {k: v for k, v in {**FINDING_PROPERTIES, **(extra_properties or {})}.items() if k not in exclude}
+    required = [k for k in FINDING_REQUIRED + list(extra_required or []) if k not in exclude]
     return {
         "type": "object",
         "properties": {
@@ -51,8 +59,8 @@ def make_findings_schema(extra_properties: dict | None = None, extra_required: l
                 "type": "array",
                 "items": {
                     "type": "object",
-                    "properties": {**FINDING_PROPERTIES, **(extra_properties or {})},
-                    "required": FINDING_REQUIRED + list(extra_required or []),
+                    "properties": properties,
+                    "required": required,
                 },
             },
         },
@@ -72,6 +80,8 @@ class SingleFileScanner(BaseScanner):
     SYSTEM_PROMPT: str = SINGLE_FILE_PROMPT
     SCHEMA: dict = SINGLE_FILE_FINDINGS_SCHEMA
     USER_INSTRUCTION: str = "Audit this file snippet for real, statically-justifiable bugs."
+    # Fields stamped onto every finding after the model returns it (e.g. a fixed category).
+    FINDING_DEFAULTS: dict = {}
 
     def run(self) -> None:
 
@@ -111,6 +121,7 @@ class SingleFileScanner(BaseScanner):
             # Write the findings to the ledger
             findings = data.get("findings", [])
             for finding in findings:
+                finding.update(self.FINDING_DEFAULTS)
                 finding["file"] = relpath
                 append_finding(self.ledger_path, finding)
             if findings:
