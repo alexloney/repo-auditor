@@ -96,3 +96,20 @@ def test_execute_audit_drops_findings_with_hallucinated_evidence(mock_client_cls
     verified = mock_verify.call_args[0][3]
     assert [f["title"] for f in verified] == ["Real"]
     assert verified[0]["line"] == 1
+
+@patch("auditor.pipeline.verify_findings", side_effect=lambda client, model, target, findings, *a, **k: findings)
+@patch("auditor.pipeline.ollama.Client")
+def test_execute_audit_writes_sarif_when_requested(mock_client_cls, mock_verify, tmp_path):
+    import json
+    from auditor.pipeline import execute_audit
+    (tmp_path / "app.py").write_text("x = 1", encoding="utf-8")
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(json.dumps({"title": "T", "file": "app.py", "evidence": "x = 1", "scanner": "batch"}) + "\n",
+                      encoding="utf-8")
+    report = tmp_path / "out.sarif"
+
+    execute_audit(tmp_path, [], "m", "h", str(ledger), str(report), report_format="sarif")
+
+    doc = json.loads(report.read_text(encoding="utf-8"))
+    assert doc["version"] == "2.1.0"
+    assert doc["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]["startLine"] == 1

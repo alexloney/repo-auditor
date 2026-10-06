@@ -9,14 +9,21 @@ from pathlib import Path
 from auditor import scanners
 from auditor.scanners.base import BaseScanner
 from auditor.agent.agent import DEFAULT_MAX_TURNS
+from auditor.evaluator.dedupe import dedupe_findings
+from auditor.evaluator.grounding import ground_findings
+from auditor.evaluator.critic import verify_findings
+from auditor.evaluator.reporter import write_report
+from auditor.evaluator.sarif import write_sarif_report
 
 # Seconds allowed for one model request. Generous, because a non-streamed request only
 # returns once the whole answer (and any reasoning) has been generated.
 DEFAULT_REQUEST_TIMEOUT = 1800
-from auditor.evaluator.dedupe import dedupe_findings
-from auditor.evaluator.grounding import ground_findings
-from auditor.evaluator.critic import verify_findings  
-from auditor.evaluator.reporter import write_report
+
+# Report format -> (writer, default file name)
+REPORT_FORMATS = {
+    "md": (write_report, "report.md"),
+    "sarif": (write_sarif_report, "report.sarif"),
+}
 
 def get_available_scanners() -> dict[str, type[BaseScanner]]:
     """Dynamically loads all BaseScanner subclasses from the scanners package.
@@ -70,6 +77,7 @@ def execute_audit(target_dir: Path,
                   skip_dirs: list[str] | None = None,
                   max_turns: int = DEFAULT_MAX_TURNS,
                   request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
+                  report_format: str = "md",
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
                   on_error: Callable[[str], None] = None) -> int:
@@ -144,6 +152,7 @@ def execute_audit(target_dir: Path,
         verified_findings = []
         on_progress("No findings to verify.")
 
-    write_report(target_dir, report_path, verified_findings)
+    writer, _ = REPORT_FORMATS[report_format]
+    writer(target_dir, report_path, verified_findings)
     on_progress(f"Report written to {report_path}")
     return 0
