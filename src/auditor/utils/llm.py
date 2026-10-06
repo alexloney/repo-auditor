@@ -1,14 +1,23 @@
-import tiktoken
-import os
 import json
+import logging
+import math
+import os
 import time
+
+logger = logging.getLogger(__name__)
 
 MAX_CONTEXT = int(os.getenv("MAX_CONTEXT", "66000"))
 OUTPUT_RESERVE = int(os.getenv("OUTPUT_RESERVE", "10000"))
 
+# Line-numbered source code measures ~3.7 chars/token on average (as low as ~2.8 for dense
+# files) with a cl100k-style BPE tokenizer. Dividing by 3 deliberately over-counts on average,
+# because under-counting overflows num_ctx and Ollama then silently truncates the prompt.
+# A character heuristic also keeps the tool fully offline (no tokenizer download).
+CHARS_PER_TOKEN = 3
+
 def estimate_tokens(text: str) -> int:
-    enc = tiktoken.get_encoding("cl100k_base")
-    return len(enc.encode(text))
+    """Conservative token estimate for budget checks; errs on the side of over-counting."""
+    return math.ceil(len(text) / CHARS_PER_TOKEN)
 
 def input_budget() -> int:
     return MAX_CONTEXT - OUTPUT_RESERVE
@@ -55,7 +64,7 @@ def call_json(client, model: str, system: str, user: str, schema: dict, retries:
             return json.loads(_strip_json_fence(raw))
         except Exception as e:
             last_err = e
-            print(f"    call_json attempt {attempt}/{retries} failed: {e}")
+            logger.warning("call_json attempt %d/%d failed: %s", attempt, retries, e)
             if attempt < retries:
                 time.sleep(2 * attempt)
     raise RuntimeError(f"call_json failed after {retries} tries: {last_err}")
