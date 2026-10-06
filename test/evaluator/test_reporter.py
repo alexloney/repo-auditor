@@ -106,3 +106,16 @@ def test_write_report_handles_null_suggested_solution(tmp_path):
     write_report(tmp_path, report_path, findings)
 
     assert "No fix provided." in report_path.read_text(encoding="utf-8")
+
+def test_write_report_shows_scanner_and_evidence(tmp_path):
+    report_path = tmp_path / "report.md"
+    findings = [{
+        "title": "Bug", "severity": "high", "file": "src/a.py", "line": 3, "description": "d",
+        "scanner": "taint", "also_found_by": ["owasp", "batch"], "evidence": "eval(x)",
+    }]
+
+    write_report(tmp_path, report_path, findings)
+    text = report_path.read_text(encoding="utf-8")
+
+    assert "**Scanner:** taint (also found by: owasp, batch)" in text
+    assert "```py" in text and "eval(x)" in text

@@ -1,6 +1,6 @@
 from pathlib import Path
 from .base import BaseScanner
-from ..utils.filesystem import list_auditable_files, number_lines, append_finding
+from ..utils.filesystem import list_auditable_files, number_lines
 from ..utils.llm import call_json, estimate_tokens
 
 SINGLE_FILE_PROMPT = (
@@ -26,7 +26,14 @@ FINDING_PROPERTIES = {
         ],
     },
     "file": {"type": "string"},
-    "line": {"type": ["integer", "null"], "description": "1-indexed line from the provided snippet."},
+    "line": {
+        "type": ["integer", "null"],
+        "description": "1-indexed line number (from the gutter) where the defect occurs. Use null only if the defect is not tied to any specific line.",
+    },
+    "evidence": {
+        "type": "string",
+        "description": "The exact line(s) of code containing the defect, copied verbatim from the file, without the line-number gutter.",
+    },
     "confidence": {
         "type": "string",
         "enum": ["high", "medium", "low"],
@@ -38,7 +45,7 @@ FINDING_PROPERTIES = {
 }
 
 FINDING_REQUIRED = [
-    "title", "severity", "category", "file",
+    "title", "severity", "category", "file", "line", "evidence",
     "description", "confidence", "suggested_solution",
 ]
 
@@ -123,6 +130,6 @@ class SingleFileScanner(BaseScanner):
             for finding in findings:
                 finding.update(self.FINDING_DEFAULTS)
                 finding["file"] = relpath
-                append_finding(self.ledger_path, finding)
+                self.record_finding(finding)
             if findings:
                 self.on_progress(f" {relpath}: {len(findings)} finding(s)")

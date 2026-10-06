@@ -24,6 +24,12 @@ def input_budget() -> int:
 
 def call_json(client, model: str, system: str, user: str, schema: dict, retries: int = 3) -> dict:
     """Calls the LLM with a JSON schema response format, retrying on transient failures."""
+    # Ollama's `format` only constrains the output's shape; the model never sees the schema's
+    # field descriptions unless they're in the prompt too (as Ollama's docs recommend).
+    system = (
+        f"{system}\n\nRespond with a JSON object matching this JSON schema, following each "
+        f"field's description:\n{json.dumps(schema)}"
+    )
     prompt_tokens = estimate_tokens(system) + estimate_tokens(user)
     if prompt_tokens > input_budget():
         raise RuntimeError(

@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .base import BaseScanner
 from .single_file import SINGLE_FILE_FINDINGS_SCHEMA
-from ..utils.filesystem import list_auditable_files, number_lines, append_finding
+from ..utils.filesystem import list_auditable_files, number_lines
 from ..utils.llm import call_json, estimate_tokens
 
 MAX_FILES_PER_BATCH = 4
@@ -192,7 +192,7 @@ class BatchScanner(BaseScanner):
                     self.on_warning(f" ! Dropping finding with unrecognized file '{finding.get('file')}'")
                     continue
                 finding["file"] = relpath
-                append_finding(self.ledger_path, finding)
+                self.record_finding(finding)
                 kept += 1
             if kept:
                 self.on_progress(f" batch {idx}: {kept} finding(s)")

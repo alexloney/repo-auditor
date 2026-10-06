@@ -32,7 +32,7 @@ def mock_scanner(tmp_path):
 
 @patch("auditor.scanners.single_file.list_auditable_files")
 @patch("auditor.scanners.single_file.call_json")
-@patch("auditor.scanners.single_file.append_finding")
+@patch("auditor.scanners.base.append_finding")
 def test_single_file_scanner_success(mock_append, mock_call_json, mock_list_files, mock_scanner, tmp_path):
     # 1. Setup Filesystem Mock
     # Create a physical file in the temporary directory so read_text() works natively
@@ -80,7 +80,7 @@ def test_single_file_scanner_file_read_error(mock_list_files, mock_scanner):
 
 @patch("auditor.scanners.single_file.list_auditable_files")
 @patch("auditor.scanners.single_file.call_json")
-@patch("auditor.scanners.single_file.append_finding")
+@patch("auditor.scanners.base.append_finding")
 def test_single_file_scanner_llm_failure(mock_append, mock_call_json, mock_list_files, mock_scanner, tmp_path):
     # Setup a valid file
     test_file = "app.py"
@@ -101,7 +101,7 @@ def test_single_file_scanner_llm_failure(mock_append, mock_call_json, mock_list_
 
 @patch("auditor.scanners.single_file.list_auditable_files")
 @patch("auditor.scanners.single_file.call_json")
-@patch("auditor.scanners.single_file.append_finding")
+@patch("auditor.scanners.base.append_finding")
 def test_single_file_scanner_no_findings(mock_append, mock_call_json, mock_list_files, mock_scanner, tmp_path):
     # Setup a valid file
     test_file = "app.py"
@@ -119,7 +119,7 @@ def test_single_file_scanner_no_findings(mock_append, mock_call_json, mock_list_
 
 @patch("auditor.scanners.single_file.list_auditable_files")
 @patch("auditor.scanners.single_file.call_json")
-@patch("auditor.scanners.single_file.append_finding")
+@patch("auditor.scanners.base.append_finding")
 def test_owasp_scanner_uses_its_own_prompt_and_schema(mock_append, mock_call_json, mock_list_files, tmp_path):
     from auditor.scanners.owasp import OwaspScanner, OWASP_SYSTEM_PROMPT
 
@@ -147,7 +147,7 @@ def test_single_file_schema_unchanged_by_subclass():
 
 @patch("auditor.scanners.single_file.list_auditable_files")
 @patch("auditor.scanners.single_file.call_json")
-@patch("auditor.scanners.single_file.append_finding")
+@patch("auditor.scanners.base.append_finding")
 def test_owasp_findings_are_tagged_security(mock_append, mock_call_json, mock_list_files, tmp_path):
     from auditor.scanners.owasp import OwaspScanner
 
@@ -163,3 +163,13 @@ def test_owasp_findings_are_tagged_security(mock_append, mock_call_json, mock_li
     schema_item = mock_call_json.call_args[0][4]["properties"]["findings"]["items"]
     assert "category" not in schema_item["properties"]
     assert "category" not in schema_item["required"]
+
+def test_findings_schema_requires_line_and_evidence():
+    from auditor.scanners.single_file import SINGLE_FILE_FINDINGS_SCHEMA
+    required = SINGLE_FILE_FINDINGS_SCHEMA["properties"]["findings"]["items"]["required"]
+    assert "line" in required and "evidence" in required
+
+@patch("auditor.scanners.base.append_finding")
+def test_record_finding_stamps_scanner_id(mock_append, mock_scanner):
+    mock_scanner.record_finding({"title": "x"})
+    assert mock_append.call_args[0][1]["scanner"] == "single-file"

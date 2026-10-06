@@ -70,3 +70,29 @@ def test_get_available_scanners_registers_classes_from_defining_module():
     assert registry["single-file"].__module__ == "auditor.scanners.single_file"
     assert registry["owasp"].__module__ == "auditor.scanners.owasp"
     assert registry["single-file"].auto_enabled is True
+
+@patch("auditor.pipeline.ollama.Client")
+def test_execute_audit_sets_client_timeout(mock_client_cls, tmp_path):
+    from auditor.pipeline import execute_audit
+    execute_audit(tmp_path, [], "m", "http://h:1", str(tmp_path / "none.json"), str(tmp_path / "r.md"),
+                  request_timeout=123)
+    mock_client_cls.assert_called_once_with(host="http://h:1", timeout=123)
+
+@patch("auditor.pipeline.verify_findings", side_effect=lambda client, model, target, findings, *a, **k: findings)
+@patch("auditor.pipeline.ollama.Client")
+def test_execute_audit_drops_findings_with_hallucinated_evidence(mock_client_cls, mock_verify, tmp_path):
+    import json
+    from auditor.pipeline import execute_audit
+    (tmp_path / "app.py").write_text("x = 1", encoding="utf-8")
+    ledger = tmp_path / "ledger.json"
+    ledger.write_text(
+        json.dumps({"title": "Real", "file": "app.py", "evidence": "x = 1"}) + "\n"
+        + json.dumps({"title": "Fake", "file": "app.py", "evidence": "eval(x)"}) + "\n",
+        encoding="utf-8",
+    )
+
+    execute_audit(tmp_path, [], "m", "h", str(ledger), str(tmp_path / "r.md"))
+
+    verified = mock_verify.call_args[0][3]
+    assert [f["title"] for f in verified] == ["Real"]
+    assert verified[0]["line"] == 1

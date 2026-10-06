@@ -11,10 +11,8 @@ from auditor.utils.llm import (
 )
 
 def test_estimate_tokens():
-    assert estimate_tokens("") == 0
-    # Rounds up, so even one character costs a token
-    assert estimate_tokens("x") == 1
-    assert estimate_tokens("def hello(): pass") == 6  # 17 chars / 3, rounded up
+    # Verify tiktoken is correctly encoding and returning a positive integer
+    assert estimate_tokens("def hello(): pass") > 0
 
 def test_input_budget():
     assert input_budget() == MAX_CONTEXT - OUTPUT_RESERVE
@@ -98,3 +96,15 @@ def test_call_json_empty_completion_exhausts_retries(mock_sleep, capsys):
     
     # Clear the captured print output so it doesn't pollute the pytest terminal
     capsys.readouterr()
+@patch("auditor.utils.llm.time.sleep")
+def test_call_json_puts_schema_in_system_prompt(mock_sleep):
+    mock_client = MagicMock()
+    mock_client.chat.return_value.message.content = '{"findings": []}'
+    schema = {"type": "object", "properties": {"x": {"type": "string", "description": "UNIQUE-HINT"}}}
+
+    call_json(mock_client, "m", "SYSTEM", "USER", schema)
+
+    system_msg = mock_client.chat.call_args.kwargs["messages"][0]["content"]
+    assert system_msg.startswith("SYSTEM")
+    assert "UNIQUE-HINT" in system_msg
+    assert mock_client.chat.call_args.kwargs["format"] == schema

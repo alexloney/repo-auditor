@@ -46,7 +46,7 @@ def test_plan_batches_respects_size_and_token_limits():
     assert all(sum(sizes[f] for f in b) <= 50 for b in batches if len(b) > 1)
     assert sorted(f for b in batches for f in b) == sorted(files)
 
-@patch("auditor.scanners.batch.append_finding")
+@patch("auditor.scanners.base.append_finding")
 @patch("auditor.scanners.batch.call_json")
 def test_batch_scanner_keeps_only_findings_for_files_in_the_batch(mock_call_json, mock_append, tmp_path):
     (tmp_path / "a.py").write_text("import b\n", encoding="utf-8")

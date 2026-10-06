@@ -64,7 +64,7 @@ class TaintAgentScanner(BaseScanner):
             make_read_file_tool(root, coverage),
             make_read_file_range_tool(root, coverage),
             make_search_code_tool(root, self.extensions, self.skip_dirs),
-            make_report_issue_tool(root, self.ledger_path),
+            make_report_issue_tool(root, self.record_finding),
         ]
 
         run_agent_loop(
