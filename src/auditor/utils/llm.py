@@ -2,6 +2,7 @@ import json
 import logging
 import math
 import os
+import threading
 import time
 
 logger = logging.getLogger(__name__)
@@ -22,6 +23,35 @@ def estimate_tokens(text: str) -> int:
 def input_budget() -> int:
     return MAX_CONTEXT - OUTPUT_RESERVE
 
+# How often the main thread wakes while waiting on a request, i.e. the worst-case Ctrl+C delay.
+_INTERRUPT_POLL_SECONDS = 0.2
+
+def interruptible_chat(client, **kwargs):
+    """Calls client.chat(**kwargs) so that Ctrl+C takes effect immediately.
+
+    A blocking socket read can't be interrupted by Ctrl+C (notably on Windows), so a plain
+    client.chat() only notices the interrupt once Ollama finishes generating. Instead, the
+    request runs on a daemon thread while the main thread waits in short, interruptible steps.
+    On Ctrl+C the KeyboardInterrupt is raised here straight away; the abandoned request dies
+    with the process, and dropping its connection makes Ollama stop generating.
+    """
+    outcome: dict = {}
+
+    def worker():
+        try:
+            outcome["response"] = client.chat(**kwargs)
+        except BaseException as e:  # handed back to the caller's thread below
+            outcome["error"] = e
+
+    thread = threading.Thread(target=worker, name="ollama-request", daemon=True)
+    thread.start()
+    while thread.is_alive():
+        thread.join(_INTERRUPT_POLL_SECONDS)
+
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["response"]
+
 def call_json(client, model: str, system: str, user: str, schema: dict, retries: int = 3) -> dict:
     """Calls the LLM with a JSON schema response format, retrying on transient failures."""
     # Ollama's `format` only constrains the output's shape; the model never sees the schema's
@@ -40,7 +70,8 @@ def call_json(client, model: str, system: str, user: str, schema: dict, retries:
     last_err = None
     for attempt in range(1, retries + 1):
         try:
-            resp = client.chat(
+            resp = interruptible_chat(
+                client,
                 model=model,
                 messages=[
                     {"role": "system", "content": system},

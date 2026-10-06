@@ -219,13 +219,14 @@ def test_verify_findings_rejection_without_severity(critic_setup):
     assert verify_findings(mock_client, "model", tmp_path, findings, **callbacks) == []
     assert mock_client.chat.call_count == 1
 
-def test_verify_findings_interrupt_keeps_remaining(critic_setup):
+def test_verify_findings_ctrl_c_stops_the_run(critic_setup):
+    """Ctrl+C is not swallowed by the critic; it propagates so the CLI can stop everything."""
     tmp_path, callbacks = critic_setup
     mock_client = MagicMock()
     mock_client.chat.side_effect = KeyboardInterrupt
 
     findings = [{"title": f"f{i}", "file": "app.py", "line": 1} for i in range(3)]
-    results = verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
+    with pytest.raises(KeyboardInterrupt):
+        verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
 
-    assert results == findings
-    assert mock_client.chat.call_count == 1
+    assert mock_client.chat.call_count == 1  # no further findings were attempted

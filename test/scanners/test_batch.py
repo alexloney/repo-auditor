@@ -67,3 +67,34 @@ def test_batch_scanner_keeps_only_findings_for_files_in_the_batch(mock_call_json
     assert "__init__.py" not in user
     assert [c[0][1]["title"] for c in mock_append.call_args_list] == ["Real"]
     assert mock_append.call_args[0][1]["file"] == "b.py"
+
+def _write_files(tmp_path, count):
+    for i in range(count):
+        (tmp_path / f"m{i}.py").write_text(f"x{i} = {i}\n", encoding="utf-8")
+
+@patch("auditor.scanners.batch.call_json", return_value={"findings": []})
+def test_batch_scanner_uses_file_cap_from_options(mock_call_json, tmp_path):
+    _write_files(tmp_path, 6)
+    scanner = BatchScanner(client=MagicMock(), model="m", target_dir=tmp_path,
+                           ledger_path=tmp_path / "l.json", extensions=[".py"],
+                           options={"batch_max_files": 2})
+    scanner.run()
+    assert mock_call_json.call_count == 3  # 6 unrelated files in one directory, 2 per batch
+
+@patch("auditor.scanners.batch.call_json", return_value={"findings": []})
+def test_batch_scanner_default_cap_groups_small_files(mock_call_json, tmp_path):
+    from auditor.scanners.batch import MAX_FILES_PER_BATCH
+    _write_files(tmp_path, MAX_FILES_PER_BATCH)
+    BatchScanner(client=MagicMock(), model="m", target_dir=tmp_path,
+                 ledger_path=tmp_path / "l.json", extensions=[".py"]).run()
+    assert mock_call_json.call_count == 1
+
+@patch("auditor.scanners.batch.call_json", return_value={"findings": []})
+def test_batch_scanner_clamps_token_budget_to_context(mock_call_json, tmp_path):
+    _write_files(tmp_path, 1)
+    scanner = BatchScanner(client=MagicMock(), model="m", target_dir=tmp_path,
+                           ledger_path=tmp_path / "l.json", extensions=[".py"],
+                           options={"batch_max_tokens": 10_000_000})
+    scanner.on_warning = MagicMock()
+    scanner.run()
+    assert "exceeds what fits" in scanner.on_warning.call_args_list[0][0][0]

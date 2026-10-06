@@ -21,6 +21,7 @@ class BaseScanner(ABC):
                  extensions: list[str] | None = None,
                  skip_dirs: list[str] | None = None,
                  max_turns: int = DEFAULT_MAX_TURNS,
+                 options: dict | None = None,
                  on_progress: Callable[[str], None] = None,
                  on_warning: Callable[[str], None] = None,
                  on_error: Callable[[str], None] = None):
@@ -35,6 +36,9 @@ class BaseScanner(ABC):
         self.skip_dirs = skip_dirs
         # Turn budget for agentic scanners; ignored by scanners that don't run an agent loop.
         self.max_turns = max_turns
+        # Scanner-specific settings (e.g. "batch_max_files"); each scanner reads its own keys
+        # and falls back to its defaults, so unrelated scanners simply ignore them.
+        self.options = options or {}
 
     @abstractmethod
     def run(self) -> None:

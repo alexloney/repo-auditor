@@ -108,3 +108,45 @@ def test_call_json_puts_schema_in_system_prompt(mock_sleep):
     assert system_msg.startswith("SYSTEM")
     assert "UNIQUE-HINT" in system_msg
     assert mock_client.chat.call_args.kwargs["format"] == schema
+
+def test_interruptible_chat_returns_response_and_passes_kwargs():
+    from auditor.utils.llm import interruptible_chat
+    client = MagicMock()
+    client.chat.return_value = "RESPONSE"
+
+    assert interruptible_chat(client, model="m", messages=[]) == "RESPONSE"
+    client.chat.assert_called_once_with(model="m", messages=[])
+
+def test_interruptible_chat_reraises_request_errors():
+    from auditor.utils.llm import interruptible_chat
+    client = MagicMock()
+    client.chat.side_effect = ConnectionError("refused")
+
+    with pytest.raises(ConnectionError, match="refused"):
+        interruptible_chat(client, model="m")
+
+def test_interruptible_chat_ctrl_c_does_not_wait_for_the_request():
+    """Ctrl+C must land while the request is still blocked, not when it returns."""
+    import _thread, threading, time
+    from auditor.utils.llm import interruptible_chat
+    release = threading.Event()
+    client = MagicMock()
+    client.chat.side_effect = lambda **kw: release.wait(30)  # a long, blocked request
+
+    threading.Timer(0.3, _thread.interrupt_main).start()  # simulated Ctrl+C
+    start = time.monotonic()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            interruptible_chat(client, model="m")
+        assert time.monotonic() - start < 5
+    finally:
+        release.set()  # let the abandoned worker thread finish
+
+@patch("auditor.utils.llm.time.sleep")
+def test_call_json_does_not_retry_on_ctrl_c(mock_sleep):
+    mock_client = MagicMock()
+    mock_client.chat.side_effect = KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        call_json(mock_client, "m", "s", "u", {"type": "object"})
+    assert mock_client.chat.call_count == 1

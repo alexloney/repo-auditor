@@ -157,3 +157,26 @@ def test_main_passes_timeout(mock_execute, tmp_path):
 
     main([str(tmp_path), "--scans", "arch", "--timeout", "90"])
     assert mock_execute.call_args.kwargs["request_timeout"] == 90
+
+@patch("auditor.cli.execute_audit", side_effect=KeyboardInterrupt)
+def test_main_ctrl_c_stops_the_run_cleanly(mock_execute, tmp_path, capsys):
+    assert main([str(tmp_path), "--scans", "arch", "--ledger", "my-ledger.json"]) == 130
+    out = capsys.readouterr().out
+    assert "Interrupted by user" in out and "my-ledger.json" in out
+
+def test_batch_limits_default_and_override():
+    from auditor.scanners.batch import MAX_FILES_PER_BATCH, MAX_BATCH_TOKENS
+    args = parse_args(["/fake/repo"])
+    assert (args.batch_max_files, args.batch_max_tokens) == (MAX_FILES_PER_BATCH, MAX_BATCH_TOKENS)
+
+    args = parse_args(["/fake/repo", "--batch-max-files", "3", "--batch-max-tokens", "20000"])
+    assert (args.batch_max_files, args.batch_max_tokens) == (3, 20000)
+
+def test_batch_limits_must_be_positive():
+    with pytest.raises(SystemExit):
+        parse_args(["/fake/repo", "--batch-max-files", "0"])
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_batch_options(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "batch", "--batch-max-files", "5", "--batch-max-tokens", "12345"])
+    assert mock_execute.call_args.kwargs["scanner_options"] == {"batch_max_files": 5, "batch_max_tokens": 12345}

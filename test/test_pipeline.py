@@ -96,3 +96,19 @@ def test_execute_audit_drops_findings_with_hallucinated_evidence(mock_client_cls
     verified = mock_verify.call_args[0][3]
     assert [f["title"] for f in verified] == ["Real"]
     assert verified[0]["line"] == 1
+
+@patch("auditor.pipeline.ollama.Client")
+def test_execute_audit_passes_scanner_options(mock_client_cls, tmp_path):
+    from auditor.pipeline import execute_audit
+    seen = {}
+
+    class FakeScanner:
+        name = "Fake"
+        def __init__(self, **kwargs):
+            seen.update(kwargs)
+        def run(self):
+            pass
+
+    execute_audit(tmp_path, [FakeScanner], "m", "h", str(tmp_path / "none.json"), str(tmp_path / "r.md"),
+                  scanner_options={"batch_max_files": 3})
+    assert seen["options"] == {"batch_max_files": 3}

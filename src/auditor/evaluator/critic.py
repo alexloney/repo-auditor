@@ -3,7 +3,7 @@ from typing import Callable
 from pathlib import Path
 import ollama
 
-from ..agent.agent import run_agent_loop, LoopOutcome
+from ..agent.agent import run_agent_loop
 from ..agent.tools import (
     make_read_file_tool, make_read_file_range_tool, make_search_code_tool, make_submit_verdict_tool,
 )
@@ -111,12 +111,6 @@ def verify_findings(client: ollama.Client,
             on_warning=on_warning,
             on_error=on_error,
         )
-
-        if outcome == LoopOutcome.INTERRUPTED:
-            remaining = findings[idx:]
-            on_warning(f" ! Critic interrupted; keeping {len(remaining)} remaining finding(s) unverified.")
-            verified.extend(remaining)
-            break
 
         if not verdicts:
             on_warning(f" ! No verdict reached ({outcome.value}), keeping finding by default.")

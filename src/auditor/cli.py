@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT
 from auditor.agent.agent import DEFAULT_MAX_TURNS
+from auditor.scanners.batch import MAX_FILES_PER_BATCH, MAX_BATCH_TOKENS
 
 DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
 
@@ -27,9 +28,14 @@ def parse_args(args=None):
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help=f"Maximum model turns for agentic scanners (retries don't count). Default: {DEFAULT_MAX_TURNS}")
     parser.add_argument("--skip-dirs", type=str, help="Comma-separated list of directories to skip during the audit, replacing the defaults.", default=",".join(DEFAULT_SKIP_DIRS))
     parser.add_argument("--add-skip-dirs", type=str, default="", help="Comma-separated list of directories to skip in addition to the defaults (or to --skip-dirs).")
+    parser.add_argument("--batch-max-files", type=int, default=MAX_FILES_PER_BATCH, help=f"batch scanner: maximum files reviewed together in one request. Default: {MAX_FILES_PER_BATCH}")
+    parser.add_argument("--batch-max-tokens", type=int, default=MAX_BATCH_TOKENS, help=f"batch scanner: maximum estimated tokens of code in one request. Default: {MAX_BATCH_TOKENS}")
     parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
     
     parsed = parser.parse_args(args)
+
+    if parsed.batch_max_files < 1 or parsed.batch_max_tokens < 1:
+        parser.error("--batch-max-files and --batch-max-tokens must be at least 1")
 
     if not parsed.repo_path and not parsed.list:
         parser.print_help()
@@ -109,6 +115,15 @@ def main(args=None):
     print(f"Report file: {parsed_args.report}")
     print(f"Max agent turns: {parsed_args.max_turns}")
 
+    try:
+        return _run_audit(target, selected_scanners, parsed_args)
+    except KeyboardInterrupt:
+        # Ctrl+C stops the whole run, whichever scanner (or the critic) is active. In-flight
+        # model requests are abandoned rather than waited on (see interruptible_chat).
+        print(f"\n[!] Interrupted by user. Findings recorded so far remain in the ledger: {parsed_args.ledger}")
+        return 130
+
+def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
     return execute_audit(
         target_dir=target,
         scanners_to_run=selected_scanners,
@@ -120,6 +135,10 @@ def main(args=None):
         skip_dirs=parsed_args.skip_dirs if parsed_args.skip_dirs else None,
         max_turns=parsed_args.max_turns,
         request_timeout=parsed_args.timeout,
+        scanner_options={
+            "batch_max_files": parsed_args.batch_max_files,
+            "batch_max_tokens": parsed_args.batch_max_tokens,
+        },
         on_progress=lambda msg: print(f"{msg}"),
         on_warning=lambda msg: print(f"{msg}"),
         on_error=lambda msg: print(f"{msg}"),

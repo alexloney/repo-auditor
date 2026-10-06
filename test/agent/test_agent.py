@@ -357,3 +357,12 @@ def test_context_token_count_resets_on_compaction():
     ctx.compact()
 
     assert ctx.token_count == sum(ctx._estimate_message(m) for m in ctx.get_payload())
+
+def test_run_agent_loop_ctrl_c_propagates(agent_setup):
+    """Ctrl+C is not turned into a scan outcome; it stops the whole run."""
+    tmp_path, callbacks, tools, mock_client = agent_setup
+    mock_client.chat.side_effect = KeyboardInterrupt
+
+    with pytest.raises(KeyboardInterrupt):
+        run_agent_loop(mock_client, "model", "sys", "user", tools, **callbacks)
+    assert mock_client.chat.call_count == 1
