@@ -158,6 +158,29 @@ def test_main_passes_timeout(mock_execute, tmp_path):
     main([str(tmp_path), "--scans", "arch", "--timeout", "90"])
     assert mock_execute.call_args.kwargs["request_timeout"] == 90
 
+def test_format_defaults_to_markdown():
+    args = parse_args(["/fake/repo"])
+    assert args.format == "md"
+    assert args.report == "report.md"
+
+def test_sarif_format_changes_default_report_name():
+    args = parse_args(["/fake/repo", "--format", "sarif"])
+    assert args.report == "report.sarif"
+
+def test_explicit_report_path_wins_over_format_default():
+    args = parse_args(["/fake/repo", "--format", "sarif", "--report", "out/scan.json"])
+    assert args.report == "out/scan.json"
+
+def test_invalid_format_is_rejected():
+    with pytest.raises(SystemExit):
+        parse_args(["/fake/repo", "--format", "pdf"])
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_report_format(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "arch", "--format", "sarif"])
+    assert mock_execute.call_args.kwargs["report_format"] == "sarif"
+    assert mock_execute.call_args.kwargs["report_file"] == "report.sarif"
+
 @patch("auditor.cli.execute_audit", side_effect=KeyboardInterrupt)
 def test_main_ctrl_c_stops_the_run_cleanly(mock_execute, tmp_path, capsys):
     assert main([str(tmp_path), "--scans", "arch", "--ledger", "my-ledger.json"]) == 130

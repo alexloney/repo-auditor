@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT
+from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT, REPORT_FORMATS
 from auditor.agent.agent import DEFAULT_MAX_TURNS
 from auditor.scanners.batch import MAX_FILES_PER_BATCH, MAX_BATCH_TOKENS
 
@@ -22,7 +22,8 @@ def parse_args(args=None):
     parser.add_argument("--model", type=str, help="Specify the LLM model to use for scanning. Default: qwen-coder-64k:latest", default="qwen-coder-64k:latest")
     parser.add_argument("--ollama", type=str, help="Specify the Ollama host to use for scanning. Default: http://localhost:11434", default="http://localhost:11434")
     parser.add_argument("--ledger", type=str, help="Specify the ledger file to use for scanning. Default: findings.json", default="findings.json")
-    parser.add_argument("--report", type=str, help="Specify the report file to use for scanning. Default: report.md", default="report.md")
+    parser.add_argument("--report", type=str, default=None, help="Specify the report file to write. Default: report.md, or report.sarif with --format sarif")
+    parser.add_argument("--format", choices=sorted(REPORT_FORMATS), default="md", help="Report format: md (Markdown) or sarif (SARIF 2.1.0, for GitHub code scanning and SARIF viewers). Default: md")
     parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit, replacing the defaults. Default: all supported extensions.", default=",".join(DEFAULT_EXTENSION))
     parser.add_argument("--add-extensions", type=str, default="", help="Comma-separated list of file extensions to add to the defaults (or to --extensions).")
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help=f"Maximum model turns for agentic scanners (retries don't count). Default: {DEFAULT_MAX_TURNS}")
@@ -33,6 +34,9 @@ def parse_args(args=None):
     parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
     
     parsed = parser.parse_args(args)
+
+    if parsed.report is None:
+        parsed.report = REPORT_FORMATS[parsed.format][1]
 
     if parsed.batch_max_files < 1 or parsed.batch_max_tokens < 1:
         parser.error("--batch-max-files and --batch-max-tokens must be at least 1")
@@ -112,7 +116,7 @@ def main(args=None):
     print(f"Extensions to include: {parsed_args.extensions if parsed_args.extensions else 'all'}")
     print(f"Directories to skip: {parsed_args.skip_dirs if parsed_args.skip_dirs else 'default skip dirs'}")
     print(f"Ledger file: {parsed_args.ledger}")
-    print(f"Report file: {parsed_args.report}")
+    print(f"Report file: {parsed_args.report} ({parsed_args.format})")
     print(f"Max agent turns: {parsed_args.max_turns}")
 
     try:
@@ -131,6 +135,7 @@ def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
         ollama_host=parsed_args.ollama,
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
+        report_format=parsed_args.format,
         extensions=parsed_args.extensions if parsed_args.extensions else None,
         skip_dirs=parsed_args.skip_dirs if parsed_args.skip_dirs else None,
         max_turns=parsed_args.max_turns,

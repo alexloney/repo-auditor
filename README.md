@@ -50,7 +50,8 @@ else.
 3. **Dedupe.** Findings describing the same defect are merged (see [Deduplication](#deduplication)).
 4. **Critic.** Each remaining finding is handed to a skeptical agent that can read and search the
    repository, and must submit a verdict: keep (optionally lowering the severity) or reject.
-5. **Report.** Surviving findings are written to a Markdown report, sorted by severity.
+5. **Report.** Surviving findings are written as a Markdown report sorted by severity, or as
+   SARIF with `--format sarif`.
 
 Scanners come in two styles:
 
@@ -118,7 +119,8 @@ repo-auditor --list
 | `--model` | `qwen-coder-64k:latest` | Ollama model name. |
 | `--ollama` | `http://localhost:11434` | Ollama server URL. |
 | `--ledger` | `findings.json` | Ledger file, relative to the current directory. |
-| `--report` | `report.md` | Report file, relative to the current directory. |
+| `--report` | `report.md` or `report.sarif` | Report file, relative to the current directory. The default follows `--format`. |
+| `--format` | `md` | Report format: `md` (Markdown) or `sarif` (SARIF 2.1.0). See [Report formats](#report-formats). |
 | `--extensions` | 33 common source extensions | Comma-separated extensions to audit, replacing the defaults, e.g. `.py,.go`. The leading dot is optional and case is ignored. An empty value audits every extension. |
 | `--add-extensions` | | Comma-separated extensions to add to the defaults (or to `--extensions`), e.g. `yml,toml`. |
 | `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, replacing the defaults. Matched exactly. |
@@ -245,9 +247,32 @@ the sink in another.
 | File | Contents |
 | --- | --- |
 | `findings.json` | JSON Lines ledger: one raw finding per line, appended by scanners. |
-| `report.md` | The final report, with the critic's reasoning as reviewer notes. |
+| `report.md` / `report.sarif` | The final report, with the critic's reasoning as reviewer notes. The format is set by `--format`. |
 
 Both are written relative to the **current directory**, not the audited repository.
+
+### Report formats
+
+- **`md`** (default): a Markdown report, sorted by severity, with the quoted evidence, the
+  scanner(s) that found each issue, reviewer notes and suggested fixes.
+- **`sarif`**: a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html)
+  log, which GitHub code scanning, the VS Code SARIF Viewer and other tools can display inline
+  at the reported line.
+  - **Rules:** each result's rule is `<scanner>/<classification>`, e.g. `taint/security`,
+    `memory/buffer-overflow` or `owasp/A03:2021-Injection`.
+  - **Levels:** critical and high findings are `error`, medium is `warning`, low is `note`.
+  - **GitHub security severity:** security rules get a `security-severity` score from the worst
+    finding under them, which is what GitHub uses to rank security alerts.
+  - **Locations:** file paths are relative to the `SRCROOT` base, which points at the audited
+    repository. The quoted evidence is attached as the region's snippet.
+  - **Tracking across runs:** each result has a `repoAuditor/v1` fingerprint built from the
+    file, title and evidence, so the same issue keeps the same identity when lines shift.
+  - **Extra fields:** severity, confidence, scanner, `also_found_by`, reviewer notes and the
+    suggested fix are under each result's `properties`.
+
+  To upload to GitHub code scanning, use the `github/codeql-action/upload-sarif` action. Paths
+  in the file are relative to the audited repository, so run the audit with that repository as
+  the target.
 
 > **The ledger is not cleared between runs.** This is deliberate, for debugging the critic and
 > report without re-running the scanners. Findings from earlier runs, including runs against
@@ -463,6 +488,7 @@ src/auditor/
     dedupe.py          Merges duplicate findings
     critic.py          Agentic verification of each finding
     reporter.py        Markdown report
+    sarif.py           SARIF 2.1.0 report
 
   utils/
     llm.py             Token estimate and schema-constrained calls with retries
