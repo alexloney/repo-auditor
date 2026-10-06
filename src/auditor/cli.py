@@ -37,6 +37,7 @@ def parse_args(args=None):
 
     if parsed.report is None:
         parsed.report = REPORT_FORMATS[parsed.format][1]
+
     if parsed.batch_max_files < 1 or parsed.batch_max_tokens < 1:
         parser.error("--batch-max-files and --batch-max-tokens must be at least 1")
 
