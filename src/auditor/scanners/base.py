@@ -4,6 +4,7 @@ from typing import Callable
 import ollama
 
 from ..agent.agent import DEFAULT_MAX_TURNS
+from ..utils.filesystem import append_finding
 
 class BaseScanner(ABC):
     # Class attributes allow the CLI to read the ID without instantiating the class
@@ -37,5 +38,14 @@ class BaseScanner(ABC):
 
     @abstractmethod
     def run(self) -> None:
-        """Executes the scanning logic and appends to the ledger."""
+        """Executes the scanning logic and records findings with record_finding()."""
         pass
+
+    def record_finding(self, finding: dict) -> None:
+        """Appends a finding to the ledger, stamped with the scanner that produced it.
+
+        All scanners (and the agentic report_issue tool) write through here, so per-scanner
+        results can be compared, e.g. to see which scanners are worth their run time.
+        """
+        finding["scanner"] = self.id
+        append_finding(self.ledger_path, finding)

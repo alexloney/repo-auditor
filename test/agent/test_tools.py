@@ -171,45 +171,63 @@ def test_search_code_truncation(workspace):
 # --- 7. Ledger / Evaluation Tests ---
 
 def test_report_issue(workspace):
-    ledger_path = workspace / "test_ledger.json"
+    (workspace / "app.py").write_text("import db\n\ndb.execute('SELECT * FROM t WHERE id=' + uid)\n", encoding="utf-8")
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
 
-    # 1. Initialize the tool using the factory
-    report_issue = make_report_issue_tool(workspace, ledger_path)
-
-    # 2. Call the newly created function
     result = report_issue(
         filepath="app.py",
-        line=10,
+        line=3,
         title="SQLi",
         description="Found vulnerability",
+        evidence="db.execute('SELECT * FROM t WHERE id=' + uid)",
         severity="high",
         category="security",
         suggested_solution="Use prepared statements"
     )
 
     assert result == "Issue successfully logged to the ledger."
+    assert recorded[0]["title"] == "SQLi"
+    assert recorded[0]["file"] == "app.py"
+    assert recorded[0]["line"] == 3
 
-    data = json.loads(ledger_path.read_text(encoding="utf-8"))
-    assert data["title"] == "SQLi"
-    assert data["file"] == "app.py"
+def test_report_issue_corrects_line_from_evidence(workspace):
+    (workspace / "app.py").write_text("a = 1\nb = 2\nc = a / 0\n", encoding="utf-8")
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
+
+    report_issue(filepath="app.py", line="9", title="t", description="d", evidence="  3 | c = a / 0")
+
+    assert recorded[0]["line"] == 3  # gutter stripped, wrong (string) line replaced
+
+def test_report_issue_rejects_evidence_not_in_file(workspace):
+    (workspace / "app.py").write_text("a = 1\n", encoding="utf-8")
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
+
+    result = report_issue(filepath="app.py", line=1, title="t", description="d", evidence="eval(user_input)")
+
+    assert "evidence was not found" in result
+    assert recorded == []
 
 def test_report_issue_normalizes_path(workspace):
-    ledger_path = workspace / "ledger.json"
-    report_issue = make_report_issue_tool(workspace, ledger_path)
+    (workspace / "src").mkdir()
+    (workspace / "src" / "app.py").write_text("x = 1\n", encoding="utf-8")
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
 
-    report_issue(filepath=r"./src\app.py", line=1, title="t", description="d")
+    report_issue(filepath=r"./src\app.py", line=1, title="t", description="d", evidence="x = 1")
 
-    data = json.loads(ledger_path.read_text(encoding="utf-8"))
-    assert data["file"] == "src/app.py"
+    assert recorded[0]["file"] == "src/app.py"
 
 def test_report_issue_rejects_path_outside_repo(workspace):
-    ledger_path = workspace / "ledger.json"
-    report_issue = make_report_issue_tool(workspace, ledger_path)
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
 
-    result = report_issue(filepath="../outside.py", line=1, title="t", description="d")
+    result = report_issue(filepath="../outside.py", line=1, title="t", description="d", evidence="x")
 
     assert result.startswith("Error logging issue")
-    assert not ledger_path.exists()
+    assert recorded == []
 
 def test_submit_verdict_forwards_arguments():
     received = []
@@ -222,7 +240,7 @@ def test_tool_parameter_descriptions_reach_schema(workspace):
     from ollama._utils import convert_function_to_tool
     tools = [make_read_file_tool(workspace), make_read_file_range_tool(workspace),
              make_list_files_tool(workspace, None, None), make_search_code_tool(workspace, None, None),
-             make_report_issue_tool(workspace, workspace / "unused.json"),
+             make_report_issue_tool(workspace, lambda _: None),
              make_submit_verdict_tool(lambda _: None)]
 
     for tool in tools:

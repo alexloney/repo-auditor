@@ -6,6 +6,7 @@ from typing import Callable
 from ..utils.llm import estimate_tokens
 from ..utils.filesystem import number_lines
 from .coverage import ReadCoverage
+from ..utils.evidence import coerce_line, find_evidence, resolve_line
 
 # Keep a wide safety margin below the 66k context window so a single huge file
 # can't blow the whole conversation budget on its own.
@@ -183,7 +184,8 @@ def make_search_code_tool(root: Path, extensions: list[str] | None, skip_dirs: l
     return search_code
 
 
-def make_report_issue_tool(root: Path, ledger_path: Path):
+def make_report_issue_tool(root: Path, record: Callable[[dict], None]):
+    """Builds the agent's finding-logging tool; each valid finding is passed to `record`."""
     root = Path(root).resolve()
 
     def report_issue(
@@ -191,6 +193,7 @@ def make_report_issue_tool(root: Path, ledger_path: Path):
         line: int,
         title: str,
         description: str,
+        evidence: str,
         severity: str = "medium",
         confidence: str = "high",
         category: str = "bug",
@@ -204,6 +207,7 @@ def make_report_issue_tool(root: Path, ledger_path: Path):
             line: Exact 1-indexed line number where the issue occurs.
             title: Short, specific name of the issue.
             description: Detailed explanation of the defect and why it is a real problem.
+            evidence: The exact line(s) of code containing the defect, copied verbatim from the file, without line numbers.
             severity: One of "critical", "high", "medium", or "low".
             confidence: How certain you are the issue is real. One of "high", "medium", or "low".
             category: Kind of issue, e.g. "bug", "security", "resource-leak", "race-condition", "performance", "correctness", or "api-misuse".
@@ -218,18 +222,31 @@ def make_report_issue_tool(root: Path, ledger_path: Path):
             return f"Error logging issue: {e}. Use a path relative to the repository root."
         rel_path = target.relative_to(root).as_posix()
 
+        # Check the quote now, so the agent can correct it instead of the finding being
+        # silently dropped later by the pipeline's evidence check.
         try:
-            with open(ledger_path, 'a', encoding='utf-8') as f:
-                f.write(json.dumps({
-                    "file": rel_path,
-                    "line": line,
-                    "title": title,
-                    "description": description,
-                    "severity": severity,
-                    "confidence": confidence,
-                    "category": category,
-                    "suggested_solution": suggested_solution,
-                }) + '\n')
+            source = target.read_text(encoding="utf-8", errors="replace")
+        except OSError as e:
+            return f"Error logging issue: could not read '{filepath}': {e}"
+        spans = find_evidence(source, evidence)
+        if not spans:
+            return (
+                "Error logging issue: the evidence was not found in that file. Quote the exact "
+                "line(s) of code from the file, without line numbers, then call report_issue again."
+            )
+
+        try:
+            record({
+                "file": rel_path,
+                "line": resolve_line(coerce_line(line), spans),
+                "title": title,
+                "description": description,
+                "evidence": evidence,
+                "severity": severity,
+                "confidence": confidence,
+                "category": category,
+                "suggested_solution": suggested_solution,
+            })
             return "Issue successfully logged to the ledger."
         except Exception as e:
             return f"Error logging issue: {str(e)}"

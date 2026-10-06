@@ -121,3 +121,39 @@ def test_parse_args_max_turns():
 def test_main_passes_max_turns(mock_execute, tmp_path):
     main([str(tmp_path), "--scans", "arch", "--max-turns", "7"])
     assert mock_execute.call_args.kwargs["max_turns"] == 7
+
+def test_add_extensions_appends_to_defaults_and_normalizes():
+    from auditor.cli import DEFAULT_EXTENSION
+    args = parse_args(["/fake/repo", "--add-extensions", "yml, .TOML,,py"])
+
+    assert args.extensions[:len(DEFAULT_EXTENSION)] == DEFAULT_EXTENSION
+    assert args.extensions[-2:] == [".yml", ".toml"]
+    assert args.extensions.count(".py") == 1  # already a default, not duplicated
+
+def test_add_extensions_appends_to_replaced_list():
+    args = parse_args(["/fake/repo", "--extensions", "PY", "--add-extensions", "go"])
+    assert args.extensions == [".py", ".go"]
+
+def test_empty_extensions_means_all_even_with_additions():
+    args = parse_args(["/fake/repo", "--extensions", "", "--add-extensions", "go"])
+    assert args.extensions is None
+
+def test_add_skip_dirs_appends_to_defaults():
+    from auditor.cli import DEFAULT_SKIP_DIRS
+    args = parse_args(["/fake/repo", "--add-skip-dirs", "fixtures, docs"])
+
+    assert set(DEFAULT_SKIP_DIRS) <= set(args.skip_dirs)
+    assert args.skip_dirs[-2:] == ["fixtures", "docs"]
+
+def test_add_skip_dirs_appends_to_replaced_list():
+    args = parse_args(["/fake/repo", "--skip-dirs", "a,b", "--add-skip-dirs", "c,a"])
+    assert args.skip_dirs == ["a", "b", "c"]
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_timeout(mock_execute, tmp_path):
+    from auditor.pipeline import DEFAULT_REQUEST_TIMEOUT
+    main([str(tmp_path), "--scans", "arch"])
+    assert mock_execute.call_args.kwargs["request_timeout"] == DEFAULT_REQUEST_TIMEOUT
+
+    main([str(tmp_path), "--scans", "arch", "--timeout", "90"])
+    assert mock_execute.call_args.kwargs["request_timeout"] == 90

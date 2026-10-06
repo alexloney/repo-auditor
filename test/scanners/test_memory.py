@@ -8,7 +8,7 @@ def make_scanner(tmp_path, extensions=None):
     scanner.on_progress, scanner.on_warning, scanner.on_error = MagicMock(), MagicMock(), MagicMock()
     return scanner
 
-@patch("auditor.scanners.memory.append_finding")
+@patch("auditor.scanners.base.append_finding")
 @patch("auditor.scanners.memory.call_json")
 def test_memory_scanner_reviews_c_functions_with_absolute_lines(mock_call_json, mock_append, tmp_path):
     (tmp_path / "buf.c").write_text("#define N 4\n\nvoid f(char *s) {\n    char b[N];\n    strcpy(b, s);\n}\n", encoding="utf-8")

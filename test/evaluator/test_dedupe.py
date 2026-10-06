@@ -104,3 +104,24 @@ def test_dedupe_findings_normalizes_path_separators():
     ]
 
     assert len(dedupe_findings(findings)) == 1
+
+def test_dedupe_records_other_scanners_that_found_the_same_bug():
+    findings = [
+        {"title": "SQL injection in query", "file": "app.py", "line": 10, "scanner": "owasp", "confidence": "medium"},
+        {"title": "SQL injection in query builder", "file": "app.py", "line": 11, "scanner": "taint", "confidence": "high"},
+        {"title": "SQL injection in query", "file": "app.py", "line": 12, "scanner": "owasp"},
+    ]
+
+    results = dedupe_findings(findings)
+
+    assert len(results) == 1
+    assert results[0]["scanner"] == "taint"
+    assert results[0]["also_found_by"] == ["owasp"]
+
+def test_dedupe_omits_also_found_by_for_single_scanner():
+    findings = [
+        {"title": "SQL injection in query", "file": "app.py", "line": 10, "scanner": "owasp"},
+        {"title": "SQL injection in query", "file": "app.py", "line": 11, "scanner": "owasp"},
+    ]
+
+    assert "also_found_by" not in dedupe_findings(findings)[0]

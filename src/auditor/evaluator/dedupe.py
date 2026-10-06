@@ -46,10 +46,13 @@ def dedupe_findings(findings: list) -> list:
 
     Findings are duplicates when they are in the same file, on nearby lines, and have similar
     titles. Of each duplicate group, the highest-confidence (then highest-severity) finding
-    is kept; ties keep the earliest one. The result is sorted by severity.
+    is kept; ties keep the earliest one. If other scanners reported the same defect, the kept
+    finding lists them in `also_found_by`. The result is sorted by severity.
     """
     # Each entry: (finding, normalized path, title tokens)
     kept: list[tuple[dict, str, frozenset[str]]] = []
+    # Scanners that reported each group, parallel to `kept`
+    group_scanners: list[set[str]] = []
 
     for f_ in findings:
         path = _normalize_path(f_.get("file"))
@@ -61,10 +64,18 @@ def dedupe_findings(findings: list) -> list:
                     and _title_similarity(tokens, other_tokens) >= TITLE_SIMILARITY_THRESHOLD):
                 if _preference(f_) < _preference(other):
                     kept[i] = (f_, path, tokens)
+                if f_.get("scanner"):
+                    group_scanners[i].add(f_["scanner"])
                 break
         else:
             kept.append((f_, path, tokens))
+            group_scanners.append({f_["scanner"]} if f_.get("scanner") else set())
 
-    out = [f_ for f_, _, _ in kept]
+    out = []
+    for (f_, _, _), scanners in zip(kept, group_scanners):
+        others = sorted(scanners - {f_.get("scanner")})
+        if others:
+            f_["also_found_by"] = others
+        out.append(f_)
     out.sort(key=lambda f_: SEVERITY_RANK.get(f_.get("severity"), 9))
     return out

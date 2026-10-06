@@ -1,7 +1,7 @@
 from .base import BaseScanner
 from .single_file import make_findings_schema
 from ..utils.code_units import CodeUnit, extract_functions, file_preamble
-from ..utils.filesystem import list_auditable_files, append_finding
+from ..utils.filesystem import list_auditable_files
 from ..utils.llm import call_json, estimate_tokens
 
 # Languages with manual memory management, where this scanner applies.
@@ -106,7 +106,7 @@ class MemorySafetyScanner(BaseScanner):
                 for finding in findings:
                     finding["file"] = relpath
                     finding["category"] = "security"
-                    append_finding(self.ledger_path, finding)
+                    self.record_finding(finding)
                 if findings:
                     names = ", ".join(u.name for u in chunk)
                     self.on_progress(f" {relpath}: {len(findings)} finding(s) in {names}")

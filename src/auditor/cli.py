@@ -2,7 +2,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
-from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners
+from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT
 from auditor.agent.agent import DEFAULT_MAX_TURNS
 
 DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
@@ -22,9 +22,12 @@ def parse_args(args=None):
     parser.add_argument("--ollama", type=str, help="Specify the Ollama host to use for scanning. Default: http://localhost:11434", default="http://localhost:11434")
     parser.add_argument("--ledger", type=str, help="Specify the ledger file to use for scanning. Default: findings.json", default="findings.json")
     parser.add_argument("--report", type=str, help="Specify the report file to use for scanning. Default: report.md", default="report.md")
-    parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit. Default: all supported extensions.", default=",".join(DEFAULT_EXTENSION))
+    parser.add_argument("--extensions", type=str, help="Comma-separated list of file extensions to include in the audit, replacing the defaults. Default: all supported extensions.", default=",".join(DEFAULT_EXTENSION))
+    parser.add_argument("--add-extensions", type=str, default="", help="Comma-separated list of file extensions to add to the defaults (or to --extensions).")
     parser.add_argument("--max-turns", type=int, default=DEFAULT_MAX_TURNS, help=f"Maximum model turns for agentic scanners (retries don't count). Default: {DEFAULT_MAX_TURNS}")
-    parser.add_argument("--skip-dirs", type=str, help="Comma-separated list of directories to skip during the audit.", default=",".join(DEFAULT_SKIP_DIRS))
+    parser.add_argument("--skip-dirs", type=str, help="Comma-separated list of directories to skip during the audit, replacing the defaults.", default=",".join(DEFAULT_SKIP_DIRS))
+    parser.add_argument("--add-skip-dirs", type=str, default="", help="Comma-separated list of directories to skip in addition to the defaults (or to --skip-dirs).")
+    parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
     
     parsed = parser.parse_args(args)
 
@@ -32,13 +35,27 @@ def parse_args(args=None):
         parser.print_help()
         sys.exit(1)
 
-    if parsed.extensions:
-        parsed.extensions = [ext.strip() for ext in parsed.extensions.split(",")]
+    # An empty --extensions means "all extensions", so there's nothing to add to.
+    extensions = _normalize_extensions(_split_list(parsed.extensions))
+    if extensions:
+        extensions = _unique(extensions + _normalize_extensions(_split_list(parsed.add_extensions)))
+    parsed.extensions = extensions or None
 
-    if parsed.skip_dirs:
-        parsed.skip_dirs = [d.strip() for d in parsed.skip_dirs.split(",")]
+    skip_dirs = _unique(_split_list(parsed.skip_dirs) + _split_list(parsed.add_skip_dirs))
+    parsed.skip_dirs = skip_dirs or None
 
     return parsed
+
+def _split_list(value: str | None) -> list[str]:
+    """Splits a comma-separated CLI value, dropping blanks (so "a,,b," -> ["a", "b"])."""
+    return [item.strip() for item in (value or "").split(",") if item.strip()]
+
+def _normalize_extensions(extensions: list[str]) -> list[str]:
+    """Lowercases and adds the leading dot, so "PY" and ".py" both mean ".py"."""
+    return [ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extensions]
+
+def _unique(items: list[str]) -> list[str]:
+    return list(dict.fromkeys(items))
 
 def list_scanners():
     print("Available scan plugins:")
@@ -102,6 +119,7 @@ def main(args=None):
         extensions=parsed_args.extensions if parsed_args.extensions else None,
         skip_dirs=parsed_args.skip_dirs if parsed_args.skip_dirs else None,
         max_turns=parsed_args.max_turns,
+        request_timeout=parsed_args.timeout,
         on_progress=lambda msg: print(f"{msg}"),
         on_warning=lambda msg: print(f"{msg}"),
         on_error=lambda msg: print(f"{msg}"),

@@ -38,16 +38,19 @@ else.
   repo on disk → │ scanners (plugins, run in sequence) │ → findings.json  (JSONL ledger)
                  └─────────────────────────────────────┘          │
                  ┌─────────────────────────────────────┐          │
-                 │ dedupe → critic (agentic) → report  │ ←────────┘
+                 │ evidence → dedupe → critic → report │ ←────────┘
                  └─────────────────────────────────────┘ → report.md
 ```
 
 1. **Scan.** Each selected scanner analyses the repository and appends findings to a shared
    JSON Lines ledger.
-2. **Dedupe.** Findings describing the same defect are merged (see [Deduplication](#deduplication)).
-3. **Critic.** Each remaining finding is handed to a skeptical agent that can read and search the
+2. **Evidence check.** Each finding's quoted code is matched against the real file. Findings
+   quoting code that isn't there are dropped, and line numbers are corrected (see
+   [Evidence check](#evidence-check)).
+3. **Dedupe.** Findings describing the same defect are merged (see [Deduplication](#deduplication)).
+4. **Critic.** Each remaining finding is handed to a skeptical agent that can read and search the
    repository, and must submit a verdict: keep (optionally lowering the severity) or reject.
-4. **Report.** Surviving findings are written to a Markdown report, sorted by severity.
+5. **Report.** Surviving findings are written to a Markdown report, sorted by severity.
 
 Scanners come in two styles:
 
@@ -116,9 +119,12 @@ repo-auditor --list
 | `--ollama` | `http://localhost:11434` | Ollama server URL. |
 | `--ledger` | `findings.json` | Ledger file, relative to the current directory. |
 | `--report` | `report.md` | Report file, relative to the current directory. |
-| `--extensions` | 33 common source extensions | Comma-separated extensions to audit, e.g. `.py,.go`. |
-| `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, matched exactly. |
+| `--extensions` | 33 common source extensions | Comma-separated extensions to audit, replacing the defaults, e.g. `.py,.go`. The leading dot is optional and case is ignored. An empty value audits every extension. |
+| `--add-extensions` | | Comma-separated extensions to add to the defaults (or to `--extensions`), e.g. `yml,toml`. |
+| `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, replacing the defaults. Matched exactly. |
+| `--add-skip-dirs` | | Comma-separated directory names to skip in addition to the defaults (or to `--skip-dirs`). |
 | `--max-turns` | `100` | Model turns allowed for agentic scanners. Retries after failed or empty responses don't count. |
+| `--timeout` | `1800` | Seconds allowed for one model request before it counts as failed and is retried. Requests aren't streamed, so this must cover a whole response, including a thinking model's reasoning. |
 
 The exit code is `0` on success and `1` when the target doesn't exist, a scanner ID is unknown,
 or the ledger can't be read.
@@ -231,6 +237,21 @@ Both are written relative to the **current directory**, not the audited reposito
 > report without re-running the scanners. Findings from earlier runs, including runs against
 > other repositories, are re-verified and re-reported. Delete `findings.json` for a clean run.
 
+### Evidence check
+
+Every finding must quote the code it is about in an `evidence` field. Before deduplication, the
+quote is matched against the real file: each quoted line must appear in a file line, in order,
+skipping blank lines. Line-number gutters the model copied are ignored.
+
+- **Found:** the finding is kept, and `line` is set to where the quote actually is. A reported
+  line already inside the quote is left alone.
+- **Not found:** the finding is dropped as hallucinated, with a warning.
+- **No evidence, or the file can't be read:** kept unchanged, e.g. ledger entries written
+  before evidence was required. The critic still reviews these.
+
+The agentic scanners' `report_issue` tool runs the same check immediately and returns an error,
+so the agent can correct its quote rather than lose the finding.
+
 ### Deduplication
 
 Two findings count as the same defect when all of these hold:
@@ -241,7 +262,8 @@ Two findings count as the same defect when all of these hold:
   "potential").
 
 Category is ignored, because the agentic scanner's categories are free text. Of each group, the
-finding with the highest confidence, then highest severity, is kept.
+finding with the highest confidence, then highest severity, is kept. If other scanners reported
+the same defect, they are listed in `also_found_by`.
 
 ### Critic
 
@@ -261,12 +283,15 @@ dropped.
 | `confidence` | `high` \| `medium` \| `low` |
 | `category` | `bug`, `security`, `resource-leak`, `race-condition`, `performance`, `correctness`, `api-misuse`, `other` (free text from `arch`) |
 | `file` | Path relative to the repo root, with forward slashes |
-| `line` | 1-indexed, or `null` |
+| `line` | 1-indexed, or `null` if the defect isn't tied to a line. Corrected by the evidence check. |
+| `evidence` | The exact line(s) of code containing the defect, quoted from the file |
+| `scanner` | ID of the scanner that reported it, stamped automatically |
 | `description` | Explanation of the defect |
 | `steps_to_reproduce` | Optional |
 | `suggested_solution` | Concrete minimal fix |
 | `owasp_category` | Added by `owasp` (A01–A10:2021) |
 | `vuln_class` | Added by `owasp` (free text) and `memory` (`buffer-overflow`, `use-after-free`, …) |
+| `also_found_by` | Added by dedupe: other scanners that reported the same defect |
 | `reviewer_notes` | Added by the critic |
 
 ---
@@ -402,7 +427,7 @@ The read and search caps also stop one tool result from filling the context wind
 src/auditor/
   __main__.py          python -m auditor
   cli.py               Argument parsing and the repo-auditor entry point
-  pipeline.py          Scanner discovery and the scan → dedupe → critic → report pipeline
+  pipeline.py          Scanner discovery and the scan → evidence → dedupe → critic → report pipeline
 
   agent/
     agent.py           Shared tool-calling loop, context tracking and compaction
@@ -419,6 +444,7 @@ src/auditor/
     taint.py           Agentic source-to-sink injection and traversal tracing
 
   evaluator/
+    grounding.py       Evidence check: drops hallucinated findings, corrects lines
     dedupe.py          Merges duplicate findings
     critic.py          Agentic verification of each finding
     reporter.py        Markdown report
@@ -427,6 +453,7 @@ src/auditor/
     llm.py             Token estimate and schema-constrained calls with retries
     filesystem.py      File selection, line numbering and ledger writes
     code_units.py      Splits C-family source into functions (for memory)
+    evidence.py        Matches a finding's quoted code against the file
 
 test/                  pytest suite, mirroring src/auditor/
 ```

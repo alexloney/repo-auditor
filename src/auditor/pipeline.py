@@ -9,7 +9,12 @@ from pathlib import Path
 from auditor import scanners
 from auditor.scanners.base import BaseScanner
 from auditor.agent.agent import DEFAULT_MAX_TURNS
+
+# Seconds allowed for one model request. Generous, because a non-streamed request only
+# returns once the whole answer (and any reasoning) has been generated.
+DEFAULT_REQUEST_TIMEOUT = 1800
 from auditor.evaluator.dedupe import dedupe_findings
+from auditor.evaluator.grounding import ground_findings
 from auditor.evaluator.critic import verify_findings  
 from auditor.evaluator.reporter import write_report
 
@@ -64,11 +69,14 @@ def execute_audit(target_dir: Path,
                   extensions: list[str] | None = None,
                   skip_dirs: list[str] | None = None,
                   max_turns: int = DEFAULT_MAX_TURNS,
+                  request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
                   on_error: Callable[[str], None] = None) -> int:
     """Runs the scanners, verifies the findings, and writes the report. Returns a process exit code."""
-    client = ollama.Client(host=f"{ollama_host}")
+    # Without a timeout, one stalled request blocks the whole run forever. The timeout must
+    # cover a full (non-streamed) generation, including a thinking model's reasoning.
+    client = ollama.Client(host=f"{ollama_host}", timeout=request_timeout)
     # NOTE: The ledger is intentionally NOT cleared between runs. Scanners only append to it,
     # so findings from earlier runs (possibly against other repos) are re-verified and
     # re-reported. This is deliberate for now, to make debugging the critic/reporter easier
@@ -114,7 +122,11 @@ def execute_audit(target_dir: Path,
         on_error(f"Failed to read ledger: {e}")
         return 1
 
-    unique_findings = dedupe_findings(raw_findings)
+    grounded_findings, dropped, corrected = ground_findings(
+        target_dir, raw_findings, on_warning=_prefixed(on_warning, "[Evidence]"))
+    on_progress(f"Evidence check: {dropped} finding(s) dropped, {corrected} line number(s) corrected.")
+
+    unique_findings = dedupe_findings(grounded_findings)
     on_progress(f"{len(unique_findings)} unique finding(s) before verification.")
     
     if unique_findings:
