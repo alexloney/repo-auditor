@@ -1,7 +1,7 @@
 import logging
 from enum import Enum
 from typing import Callable
-from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens
+from auditor.utils.llm import MAX_CONTEXT, OUTPUT_RESERVE, estimate_tokens, interruptible_chat
 from auditor.agent.coverage import ReadCoverage
 
 CONTEXT_SAFETY_MARGIN = 0.6
@@ -16,7 +16,6 @@ class LoopOutcome(str, Enum):
     COMPLETED = "completed"      # stop token emitted or is_done() returned True
     TURN_LIMIT = "turn_limit"    # ran out of turns
     ABORTED = "aborted"          # too many consecutive request failures / empty completions
-    INTERRUPTED = "interrupted"  # Ctrl+C
 
 class ConversationContext:
     """Encapsulates message history, token estimation, and context compaction."""
@@ -79,7 +78,8 @@ class ConversationContext:
 
         if digest:
             try:
-                response = self.client.chat(
+                response = interruptible_chat(
+                    self.client,
                     model=self.model,
                     messages=[
                         {"role": "system", "content": self.system_prompt},
@@ -179,7 +179,8 @@ def _chat_with_retries(
     Returns a tuple of (msg, status). Status is "success", "retry", or "abort".
     """
     try:
-        response = ctx.client.chat(
+        response = interruptible_chat(
+            ctx.client,
             model=ctx.model,
             messages=ctx.get_payload(),
             tools=tools,
@@ -239,6 +240,8 @@ def run_agent_loop(
 
     Only successful model responses count as turns; retries after request failures or
     empty completions are bounded separately by MAX_CONSECUTIVE_ERRORS / MAX_CONSECUTIVE_EMPTY.
+
+    Ctrl+C (KeyboardInterrupt) is deliberately not caught: it propagates so the whole run stops.
     """
     on_progress = on_progress or (lambda _: None)
     on_warning = on_warning or (lambda _: None)
@@ -252,39 +255,35 @@ def run_agent_loop(
 
     on_progress(f"Booting agent loop with {model}...")
 
-    try:
-        turns = 0
-        while turns < max_turns:
-            if ctx.is_full:
-                ctx.compact()
+    turns = 0
+    while turns < max_turns:
+        if ctx.is_full:
+            ctx.compact()
 
-            msg, status = _chat_with_retries(ctx, tools, error_state, on_warning, on_error)
+        msg, status = _chat_with_retries(ctx, tools, error_state, on_warning, on_error)
 
-            if status == "abort":
-                return LoopOutcome.ABORTED
-            if status == "retry":
-                continue
-            turns += 1
+        if status == "abort":
+            return LoopOutcome.ABORTED
+        if status == "retry":
+            continue
+        turns += 1
 
-            if getattr(msg, "tool_calls", None):
-                ctx.append(msg)
-                tool_results = _execute_tools(msg.tool_calls, available_tools, on_progress)
-                ctx.extend(tool_results)
-                if is_done is not None and is_done():
-                    return LoopOutcome.COMPLETED
-            else:
-                content = (msg.content or "").strip()
-                on_progress(f"Agent: {content}")
+        if getattr(msg, "tool_calls", None):
+            ctx.append(msg)
+            tool_results = _execute_tools(msg.tool_calls, available_tools, on_progress)
+            ctx.extend(tool_results)
+            if is_done is not None and is_done():
+                return LoopOutcome.COMPLETED
+        else:
+            content = (msg.content or "").strip()
+            on_progress(f"Agent: {content}")
 
-                if stop_token and stop_token in content:
-                    return LoopOutcome.COMPLETED
+            if stop_token and stop_token in content:
+                return LoopOutcome.COMPLETED
 
-                ctx.append(msg)
-                ctx.append({"role": "user", "content": nudge_message})
+            ctx.append(msg)
+            ctx.append({"role": "user", "content": nudge_message})
 
-        on_warning(f"Reached the {max_turns}-turn limit; stopping.")
-        return LoopOutcome.TURN_LIMIT
+    on_warning(f"Reached the {max_turns}-turn limit; stopping.")
+    return LoopOutcome.TURN_LIMIT
 
-    except KeyboardInterrupt:
-        on_warning("Aborted by user.")
-        return LoopOutcome.INTERRUPTED

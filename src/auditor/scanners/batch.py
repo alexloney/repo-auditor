@@ -6,10 +6,15 @@ from pathlib import Path
 from .base import BaseScanner
 from .single_file import SINGLE_FILE_FINDINGS_SCHEMA
 from ..utils.filesystem import list_auditable_files, number_lines
-from ..utils.llm import call_json, estimate_tokens
+from ..utils.llm import call_json, estimate_tokens, input_budget
 
-MAX_FILES_PER_BATCH = 4
+# The token budget is the main limit; the file cap is a safety limit for many small files,
+# where the model's attention per file (and its accuracy at attributing findings to the
+# right file) drops even though the total size is fine. Both are overridable from the CLI.
+MAX_FILES_PER_BATCH = 8
 MAX_BATCH_TOKENS = 40000
+# Room left in the input budget for the system prompt and the response schema.
+PROMPT_OVERHEAD_TOKENS = 3000
 
 BATCH_SYSTEM_PROMPT = (
     "You are a meticulous senior software engineer auditing a batch of codebase files to find "
@@ -138,6 +143,14 @@ class BatchScanner(BaseScanner):
     name = "Batched Context Analysis"
 
     def run(self) -> None:
+        max_files = self.options.get("batch_max_files", MAX_FILES_PER_BATCH)
+        max_tokens = self.options.get("batch_max_tokens", MAX_BATCH_TOKENS)
+        usable = input_budget() - PROMPT_OVERHEAD_TOKENS
+        if max_tokens > usable:
+            self.on_warning(f" ! batch token budget {max_tokens} exceeds what fits in the model's "
+                            f"context (~{usable}); using {usable}")
+            max_tokens = usable
+
         files = list_auditable_files(self.target_dir, self.extensions, self.skip_dirs)
         self.on_progress(f"{len(files)} audit-eligible file(s) selected")
 
@@ -158,7 +171,7 @@ class BatchScanner(BaseScanner):
                 f"--- END FILE: {relpath} ---\n"
             )
             size = estimate_tokens(block)
-            if size > MAX_BATCH_TOKENS:
+            if size > max_tokens:
                 self.on_warning(f" ! {relpath}: too large to batch ({size} tok), skipping")
                 continue
             contents[relpath], blocks[relpath], sizes[relpath] = text, block, size
@@ -167,7 +180,7 @@ class BatchScanner(BaseScanner):
             return
 
         batch_files = list(contents)
-        batches = plan_batches(batch_files, build_import_graph(contents), sizes)
+        batches = plan_batches(batch_files, build_import_graph(contents), sizes, max_files, max_tokens)
         self.on_progress(f"{len(batches)} batch(es) planned")
 
         for idx, batch in enumerate(batches, start=1):

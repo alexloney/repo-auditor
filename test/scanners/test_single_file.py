@@ -173,3 +173,14 @@ def test_findings_schema_requires_line_and_evidence():
 def test_record_finding_stamps_scanner_id(mock_append, mock_scanner):
     mock_scanner.record_finding({"title": "x"})
     assert mock_append.call_args[0][1]["scanner"] == "single-file"
+
+@patch("auditor.scanners.single_file.list_auditable_files")
+@patch("auditor.scanners.single_file.call_json", side_effect=KeyboardInterrupt)
+def test_single_file_scanner_ctrl_c_propagates(mock_call_json, mock_list_files, mock_scanner, tmp_path):
+    (tmp_path / "a.py").write_text("x = 1", encoding="utf-8")
+    (tmp_path / "b.py").write_text("y = 2", encoding="utf-8")
+    mock_list_files.return_value = ["a.py", "b.py"]
+
+    with pytest.raises(KeyboardInterrupt):
+        mock_scanner.run()
+    assert mock_call_json.call_count == 1  # didn't carry on to the next file

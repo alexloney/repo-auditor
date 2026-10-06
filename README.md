@@ -124,10 +124,20 @@ repo-auditor --list
 | `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, replacing the defaults. Matched exactly. |
 | `--add-skip-dirs` | | Comma-separated directory names to skip in addition to the defaults (or to `--skip-dirs`). |
 | `--max-turns` | `100` | Model turns allowed for agentic scanners. Retries after failed or empty responses don't count. |
+| `--batch-max-files` | `8` | `batch` scanner: most files reviewed together in one request. |
+| `--batch-max-tokens` | `40000` | `batch` scanner: most estimated tokens of code in one request. Lowered automatically if it wouldn't fit in the model's context. |
 | `--timeout` | `1800` | Seconds allowed for one model request before it counts as failed and is retried. Requests aren't streamed, so this must cover a whole response, including a thinking model's reasoning. |
 
-The exit code is `0` on success and `1` when the target doesn't exist, a scanner ID is unknown,
-or the ledger can't be read.
+The exit code is `0` on success, `1` when the target doesn't exist, a scanner ID is unknown,
+or the ledger can't be read, and `130` when the run is interrupted.
+
+### Stopping a run
+
+**Ctrl+C stops the whole run immediately**, whichever scanner, or the critic, is running. It
+doesn't wait for the current model request to finish: requests run on a background thread, so
+the interrupt takes effect within a fraction of a second, and the abandoned request is dropped
+when the program exits. Findings already recorded stay in the ledger. No report is written for
+an interrupted run.
 
 ### Enabling and disabling scanners
 
@@ -170,14 +180,20 @@ directly cause a vulnerability. Each finding carries an `owasp_category` (A01–
 
 ### `batch`
 
-Reviews groups of up to 4 related files in one request, so the model can check the contracts
-between them: arguments, return values, shared state and resources.
+Reviews groups of related files in one request, so the model can check the contracts between
+them: arguments, return values, shared state and resources.
 
 Files are grouped without any model calls. Each file is linked to the repository files that its
 `import`, `from`, `#include`, `require` or `use` lines refer to, by file name (or by directory
 name for `__init__.py`, `index.*` and similar). Linked files are grouped together, starting from
-the most-connected ones, within a 40,000-token budget per request. Files with no links are
-grouped with others in the same directory. Every non-empty file lands in exactly one batch.
+the most-connected ones. Files with no links are grouped with others in the same directory.
+Every non-empty file lands in exactly one batch.
+
+Each batch is limited by tokens first: at most 40,000 estimated tokens of code
+(`--batch-max-tokens`). There's also a cap of 8 files (`--batch-max-files`), because with many
+small files the model's attention to each one drops and it misattributes findings more often,
+even when the total size is fine. Both defaults are starting points rather than measured optima,
+so tune them for your model.
 
 Findings attributed to a file that wasn't in the batch are dropped.
 
@@ -270,8 +286,7 @@ the same defect, they are listed in `also_found_by`.
 Each finding is checked by an agent given about 200 lines around the reported line, plus
 `read_file`, `read_file_range` and `search_code`. It has 10 turns to call `submit_verdict`.
 The critic **fails open**: a finding is kept if its file can't be read, the model never reaches a
-verdict, or requests keep failing. Pressing Ctrl+C during the critic keeps the remaining findings
-unverified and still writes the report. A finding whose path points outside the repository is
+verdict, or requests keep failing. A finding whose path points outside the repository is
 dropped.
 
 ### Finding schema
@@ -391,8 +406,8 @@ class MyAgentScanner(BaseScanner):
 ```
 
 `run_agent_loop` handles token accounting, history compaction, retries for failed and empty
-responses, the turn limit and Ctrl+C. It returns a `LoopOutcome` (`completed`, `turn_limit`,
-`aborted` or `interrupted`). To stop on something other than a stop phrase, pass
+responses, and the turn limit. It returns a `LoopOutcome` (`completed`, `turn_limit` or
+`aborted`). Ctrl+C isn't caught; it propagates so the whole run stops. To stop on something other than a stop phrase, pass
 `stop_token=None` and an `is_done` callback; the critic does this to stop once `submit_verdict`
 has been called.
 
