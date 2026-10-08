@@ -5,7 +5,7 @@ from pathlib import Path
 
 from .base import BaseScanner
 from .single_file import SINGLE_FILE_FINDINGS_SCHEMA
-from ..utils.filesystem import list_auditable_files, number_lines
+from ..utils.filesystem import list_auditable_files, normalize_relpath, number_lines
 from ..utils.llm import call_json, estimate_tokens, input_budget
 
 # The token budget is the main limit; the file cap is a safety limit for many small files,
@@ -128,10 +128,6 @@ def plan_batches(files: list[str], edges: dict[str, set[str]], sizes: dict[str, 
     return batches
 
 
-def _normalize(path) -> str:
-    return str(path or "").replace("\\", "/").removeprefix("./")
-
-
 class BatchScanner(BaseScanner):
     """Reviews groups of related files together so the model can check contracts between them.
 
@@ -179,8 +175,7 @@ class BatchScanner(BaseScanner):
         if not contents:
             return
 
-        batch_files = list(contents)
-        batches = plan_batches(batch_files, build_import_graph(contents), sizes, max_files, max_tokens)
+        batches = plan_batches(list(contents), build_import_graph(contents), sizes, max_files, max_tokens)
         self.on_progress(f"{len(batches)} batch(es) planned")
 
         for idx, batch in enumerate(batches, start=1):
@@ -200,7 +195,7 @@ class BatchScanner(BaseScanner):
             kept = 0
             for finding in data.get("findings", []):
                 # The model must attribute each finding to one of the files it was actually shown.
-                relpath = _normalize(finding.get("file"))
+                relpath = normalize_relpath(finding.get("file"))
                 if relpath not in batch_set:
                     self.on_warning(f" ! Dropping finding with unrecognized file '{finding.get('file')}'")
                     continue

@@ -1,10 +1,7 @@
 from .base import BaseScanner
 from ..agent.agent import run_agent_loop
 from ..agent.coverage import ReadCoverage
-from ..agent.tools import (
-    make_read_file_tool, make_read_file_range_tool, make_report_issue_tool,
-    make_list_files_tool, make_search_code_tool,
-)
+from ..agent.tools import make_auditor_tools
 
 TAINT_SYSTEM_PROMPT = (
     "You are an application security engineer performing interprocedural taint analysis on a repository. "
@@ -57,22 +54,13 @@ class TaintAgentScanner(BaseScanner):
     name = "Injection & Traversal Taint Scan"
 
     def run(self) -> None:
-        root = self.target_dir
         coverage = ReadCoverage()
-        tools = [
-            make_list_files_tool(root, self.extensions, self.skip_dirs),
-            make_read_file_tool(root, coverage),
-            make_read_file_range_tool(root, coverage),
-            make_search_code_tool(root, self.extensions, self.skip_dirs),
-            make_report_issue_tool(root, self.record_finding),
-        ]
-
         run_agent_loop(
             client=self.client,
             model=self.model,
             system_prompt=TAINT_SYSTEM_PROMPT,
             initial_user_prompt=TAINT_INITIAL_PROMPT,
-            tools=tools,
+            tools=make_auditor_tools(self.target_dir, self.extensions, self.skip_dirs, coverage, self.record_finding),
             max_turns=self.max_turns,
             coverage=coverage,
             on_progress=self.on_progress,

@@ -1,7 +1,7 @@
 from .base import BaseScanner
 from .single_file import make_findings_schema
 from ..utils.code_units import CodeUnit, extract_functions, file_preamble
-from ..utils.filesystem import list_auditable_files
+from ..utils.filesystem import list_auditable_files, number_lines
 from ..utils.llm import call_json, estimate_tokens
 
 # Languages with manual memory management, where this scanner applies.
@@ -136,16 +136,11 @@ class MemorySafetyScanner(BaseScanner):
         return chunks
 
     def _review_chunk(self, relpath: str, preamble: str, units: list[CodeUnit]) -> list[dict]:
-        blocks = []
-        for unit in units:
-            numbered = "\n".join(
-                f"{unit.start_line + i:4d} | {line}"
-                for i, line in enumerate(unit.text.splitlines())
-            )
-            blocks.append(
-                f"--- FUNCTION: {unit.name} (lines {unit.start_line}-{unit.end_line}) ---\n"
-                f"{numbered}\n"
-            )
+        blocks = [
+            f"--- FUNCTION: {unit.name} (lines {unit.start_line}-{unit.end_line}) ---\n"
+            f"{number_lines(unit.text, unit.start_line)}\n"
+            for unit in units
+        ]
 
         context = (
             f"File-level declarations (for buffer sizes and types):\n```\n{preamble}\n```\n\n"

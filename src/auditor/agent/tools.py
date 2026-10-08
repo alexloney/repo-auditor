@@ -1,5 +1,6 @@
-import os
+import itertools
 import json
+import os
 from pathlib import Path
 from typing import Callable
 
@@ -12,6 +13,8 @@ from ..utils.evidence import coerce_line, find_evidence, resolve_line
 # can't blow the whole conversation budget on its own.
 MAX_READ_TOKENS = 15000
 MAX_SEARCH_RESULTS = 100
+# Fallback filter for when no extension list is given.
+_BINARY_SUFFIXES = {'.png', '.jpg', '.exe', '.dll', '.so'}
 
 # Every tool is built by a factory that closes over the repository root. All paths
 # are resolved against that root and must not escape it, since the repo content the
@@ -45,7 +48,7 @@ def make_read_file_tool(root: Path, coverage: ReadCoverage | None = None):
                 coverage.record_full(target.relative_to(root).as_posix())
             return numbered_content
         except Exception as e:
-            return f"Error reading file '{filepath}': {str(e)}"
+            return f"Error reading file '{filepath}': {e}"
 
     return read_file
 
@@ -82,7 +85,7 @@ def make_read_file_range_tool(root: Path, coverage: ReadCoverage | None = None):
                 coverage.record_range(target.relative_to(root).as_posix(), start, end)
             return snippet
         except Exception as e:
-            return f"Error reading file '{filepath}': {str(e)}"
+            return f"Error reading file '{filepath}': {e}"
 
     return read_file_range
 
@@ -117,7 +120,7 @@ def make_list_files_tool(root: Path, extensions: list[str] | None, skip_dirs: li
 
             return json.dumps({"directory": directory, "contents": filtered})
         except Exception as e:
-            return f"Error reading directory: {str(e)}"
+            return f"Error reading directory: {e}"
 
     return list_files
 
@@ -138,48 +141,37 @@ def make_search_code_tool(root: Path, extensions: list[str] | None, skip_dirs: l
         """
         try:
             target = _resolve_within_root(root, directory)
-            results = []
-            truncated = False
-
-            for dirpath, dirs, files in os.walk(target):
-                # Prune hidden directories and user-defined skip directories in-place
-                dirs[:] = [d for d in dirs if not d.startswith('.') and d not in skip_set]
-
-                for file in files:
-                    path = Path(dirpath) / file
-
-                    # Apply extension filtering
-                    if ext_set is not None and path.suffix not in ext_set:
-                        continue
-
-                    # Fallback binary filter
-                    if path.suffix in ['.png', '.jpg', '.exe', '.dll', '.so']:
-                        continue
-
-                    try:
-                        with open(path, 'r', encoding='utf-8', errors='ignore') as f:
-                            for i, line in enumerate(f):
-                                if query in line:
-                                    rel_path = path.relative_to(root).as_posix()
-                                    results.append(f"{rel_path}:{i+1}: {line.strip()[:300]}")
-                                    if len(results) >= MAX_SEARCH_RESULTS:
-                                        truncated = True
-                                        break
-                    except Exception:
-                        continue
-
-                    if truncated:
-                        break
-                if truncated:
-                    break
+            results = list(itertools.islice(_matches(target, query), MAX_SEARCH_RESULTS))
 
             if not results:
                 return f"No matches found for '{query}'."
-            if truncated:
+            if len(results) >= MAX_SEARCH_RESULTS:
                 results.append(f"... results truncated at {MAX_SEARCH_RESULTS} matches. Use a more specific query.")
             return "\n".join(results)
         except Exception as e:
-            return f"Error searching code: {str(e)}"
+            return f"Error searching code: {e}"
+
+    def _matches(target: Path, query: str):
+        """Yields "path:line: text" for each matching line, walking files lazily."""
+        for dirpath, dirs, files in os.walk(target):
+            # Prune hidden directories and user-defined skip directories in-place
+            dirs[:] = [d for d in dirs if not d.startswith('.') and d not in skip_set]
+
+            for file in files:
+                path = Path(dirpath) / file
+                if ext_set is not None and path.suffix not in ext_set:
+                    continue
+                if path.suffix in _BINARY_SUFFIXES:
+                    continue
+
+                try:
+                    with open(path, 'r', encoding='utf-8', errors='ignore') as f:
+                        for i, line in enumerate(f, start=1):
+                            if query in line:
+                                rel_path = path.relative_to(root).as_posix()
+                                yield f"{rel_path}:{i}: {line.strip()[:300]}"
+                except Exception:
+                    continue
 
     return search_code
 
@@ -249,8 +241,20 @@ def make_report_issue_tool(root: Path, record: Callable[[dict], None]):
             })
             return "Issue successfully logged to the ledger."
         except Exception as e:
-            return f"Error logging issue: {str(e)}"
+            return f"Error logging issue: {e}"
     return report_issue
+
+
+def make_auditor_tools(root: Path, extensions: list[str] | None, skip_dirs: list[str] | None,
+                       coverage: ReadCoverage, record: Callable[[dict], None]) -> list:
+    """The full toolset for an exploring audit agent: browse, read, search, and report findings."""
+    return [
+        make_list_files_tool(root, extensions, skip_dirs),
+        make_read_file_tool(root, coverage),
+        make_read_file_range_tool(root, coverage),
+        make_search_code_tool(root, extensions, skip_dirs),
+        make_report_issue_tool(root, record),
+    ]
 
 
 def make_submit_verdict_tool(on_verdict: Callable[[dict], None]):

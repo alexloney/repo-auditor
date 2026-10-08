@@ -32,7 +32,7 @@ def parse_args(args=None):
     parser.add_argument("--batch-max-files", type=int, default=MAX_FILES_PER_BATCH, help=f"batch scanner: maximum files reviewed together in one request. Default: {MAX_FILES_PER_BATCH}")
     parser.add_argument("--batch-max-tokens", type=int, default=MAX_BATCH_TOKENS, help=f"batch scanner: maximum estimated tokens of code in one request. Default: {MAX_BATCH_TOKENS}")
     parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
-    
+
     parsed = parser.parse_args(args)
 
     if parsed.report is None:
@@ -82,10 +82,10 @@ def main(args=None):
 
     # Library modules report retries and recoverable failures through `logging`.
     logging.basicConfig(level=logging.WARNING, format="    ! %(message)s")
-    
+
     if parsed_args.list:
         return list_scanners()
-    
+
     target = Path(parsed_args.repo_path).resolve()
 
     if not target.is_dir():
@@ -111,10 +111,9 @@ def main(args=None):
         return 1
 
     print(f"Starting audit on {target.name} with {len(selected_scanners)} scanner(s)...")
-    
     print(f"Target directory: {target}")
-    print(f"Extensions to include: {parsed_args.extensions if parsed_args.extensions else 'all'}")
-    print(f"Directories to skip: {parsed_args.skip_dirs if parsed_args.skip_dirs else 'default skip dirs'}")
+    print(f"Extensions to include: {parsed_args.extensions or 'all'}")
+    print(f"Directories to skip: {parsed_args.skip_dirs or 'default skip dirs'}")
     print(f"Ledger file: {parsed_args.ledger}")
     print(f"Report file: {parsed_args.report} ({parsed_args.format})")
     print(f"Max agent turns: {parsed_args.max_turns}")
@@ -136,15 +135,15 @@ def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
         report_format=parsed_args.format,
-        extensions=parsed_args.extensions if parsed_args.extensions else None,
-        skip_dirs=parsed_args.skip_dirs if parsed_args.skip_dirs else None,
+        extensions=parsed_args.extensions,
+        skip_dirs=parsed_args.skip_dirs,
         max_turns=parsed_args.max_turns,
         request_timeout=parsed_args.timeout,
         scanner_options={
             "batch_max_files": parsed_args.batch_max_files,
             "batch_max_tokens": parsed_args.batch_max_tokens,
         },
-        on_progress=lambda msg: print(f"{msg}"),
-        on_warning=lambda msg: print(f"{msg}"),
-        on_error=lambda msg: print(f"{msg}"),
+        on_progress=print,
+        on_warning=print,
+        on_error=print,
     )

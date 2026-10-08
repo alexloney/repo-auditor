@@ -13,10 +13,10 @@ class BaseScanner(ABC):
     # Set by the plugin loader; False for modules whose filename starts with '_'.
     auto_enabled: bool = True
 
-    def __init__(self, 
-                 client: ollama.Client, 
+    def __init__(self,
+                 client: ollama.Client,
                  model: str,
-                 target_dir: Path, 
+                 target_dir: Path,
                  ledger_path: Path,
                  extensions: list[str] | None = None,
                  skip_dirs: list[str] | None = None,

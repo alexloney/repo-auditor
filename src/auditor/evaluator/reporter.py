@@ -1,13 +1,10 @@
-from pathlib import Path
+from collections import Counter
 from datetime import datetime
+from pathlib import Path
 
 def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
     """Formats verified findings into a Markdown file."""
-
-    sev_counts = {}
-    for f_ in findings:
-        sev = f_.get("severity", "unknown")
-        sev_counts[sev] = sev_counts.get(sev, 0) + 1
+    sev_counts = Counter(f_.get("severity", "unknown") for f_ in findings)
 
     header = [
         f"# Static Audit Report — {target_dir.name}",
@@ -37,7 +34,6 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
                 lang = Path(str(f.get("file") or "")).suffix.lstrip(".")
                 evidence = f"\n**Evidence**\n```{lang}\n{f['evidence'].strip()}\n```\n"
 
-            # Remove the stripping logic, just ensure it isn't empty
             fix = (f.get('suggested_solution') or '').strip() or 'No fix provided.'
 
             body.append(
@@ -47,7 +43,7 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
                 f"{scanner}\n"
                 f"**Details**\n{f.get('description')}\n"
                 f"{evidence}{repro}{notes}\n"
-                # Output the LLM's string exactly as-is without wrapping it in your own ticks
+                # The fix is written as-is, not fenced: models usually include their own code fences
                 f"**Suggested solution**\n{fix}\n\n"
             )
 

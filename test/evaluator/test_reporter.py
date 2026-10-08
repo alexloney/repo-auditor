@@ -1,5 +1,3 @@
-import pytest
-from pathlib import Path
 from auditor.evaluator.reporter import write_report
 
 def test_write_report_empty(tmp_path):

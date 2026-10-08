@@ -91,25 +91,16 @@ class SingleFileScanner(BaseScanner):
     FINDING_DEFAULTS: dict = {}
 
     def run(self) -> None:
-
-        # Obtain a list of all files that we can scan
         files = list_auditable_files(self.target_dir, self.extensions, self.skip_dirs)
         self.on_progress(f"{len(files)} audit-eligible file(s) selected")
 
-        # Loop through all files that we can scan
         for relpath in files:
-
-            # Obtain the full path for the file, then read the file
-            # contents.
-            full = self.target_dir / relpath
             try:
-                content = full.read_text(encoding="utf-8", errors="replace")
+                content = (self.target_dir / relpath).read_text(encoding="utf-8", errors="replace")
             except OSError as e:
                 self.on_error(f" ! {relpath}: could not read file -> {e}")
                 continue
 
-            # Build our user prompt for this file, add line numbers
-            # to the file that's being scanned.
             user = (
                 f"Repo: {self.target_dir.name}\n"
                 f"File: {relpath}\n\n"
@@ -117,7 +108,6 @@ class SingleFileScanner(BaseScanner):
                 f"{self.USER_INSTRUCTION}"
             )
 
-            # Call the LLM to generate a report over the file
             self.on_progress(f"reviewing {relpath} ({estimate_tokens(user)} tok in)")
             try:
                 data = call_json(self.client, self.model, self.SYSTEM_PROMPT, user, self.SCHEMA)
@@ -125,7 +115,6 @@ class SingleFileScanner(BaseScanner):
                 self.on_warning(f" ! {relpath}: review failed -> {e}")
                 continue
 
-            # Write the findings to the ledger
             findings = data.get("findings", [])
             for finding in findings:
                 finding.update(self.FINDING_DEFAULTS)
