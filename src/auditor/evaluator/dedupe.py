@@ -1,5 +1,7 @@
 import re
 
+from ..utils.filesystem import normalize_relpath
+
 # Two findings in the same file are duplicates when their lines are within LINE_WINDOW of each
 # other (or either has no line) AND their titles are similar. Category is deliberately ignored:
 # the agentic scanner's categories are free text and won't match the single-file enum.
@@ -14,9 +16,6 @@ _STOPWORDS = {
     "at", "by", "from", "when", "if", "not", "no", "may", "can", "could", "possible",
     "potential", "missing", "bug", "issue", "error",
 }
-
-def _normalize_path(path) -> str:
-    return (path or "").replace("\\", "/").removeprefix("./")
 
 def _title_tokens(title) -> frozenset[str]:
     words = re.findall(r"[a-z0-9]+", (title or "").lower())
@@ -55,7 +54,7 @@ def dedupe_findings(findings: list) -> list:
     group_scanners: list[set[str]] = []
 
     for f_ in findings:
-        path = _normalize_path(f_.get("file"))
+        path = normalize_relpath(f_.get("file"))
         tokens = _title_tokens(f_.get("title"))
 
         for i, (other, other_path, other_tokens) in enumerate(kept):

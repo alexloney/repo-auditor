@@ -1,4 +1,3 @@
-import pytest
 from unittest.mock import patch, MagicMock
 from auditor.pipeline import get_available_scanners, filter_scanners
 

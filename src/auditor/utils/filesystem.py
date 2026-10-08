@@ -11,11 +11,13 @@ SKIP_FILE_PATTERNS = (
     "test_*", "*_test.*", "*_tests.*", "*.test.*", "*.spec.*", "*.min.*",
 )
 
-def number_lines(content: str) -> str:
-    """
-    Adds line numbers to each line of the given content.
-    """
-    return "\n".join(f"{i + 1:4d} | {line}" for i, line in enumerate(content.splitlines()))
+def number_lines(content: str, start: int = 1) -> str:
+    """Prefixes each line with its line number ("  42 | ..."), counting from `start`."""
+    return "\n".join(f"{start + i:4d} | {line}" for i, line in enumerate(content.splitlines()))
+
+def normalize_relpath(path) -> str:
+    """Forward slashes and no leading './', so the same file always has the same path string."""
+    return str(path or "").replace("\\", "/").removeprefix("./")
 
 
 def is_auditable(relpath: str, extensions: set | dict | None = None, skip_dirs: set | dict | None = None) -> bool:
@@ -31,26 +33,16 @@ def is_auditable(relpath: str, extensions: set | dict | None = None, skip_dirs: 
     if any(fnmatch.fnmatchcase(filename, pattern) for pattern in SKIP_FILE_PATTERNS):
         return False
 
-    ext = os.path.splitext(filename)[1]
-
     # If no specific extensions are provided, consider all files auditable
-    if extensions is None:
-        return True
-    
-    return ext in extensions
+    return extensions is None or os.path.splitext(filename)[1] in extensions
 
 
 def list_auditable_files(target_dir: Path, extensions: set | dict | None = None, skip_dirs: set | None = None) -> list[str]:
     """Walks target_dir and returns a list of relative paths."""
-    
-    directories_to_skip = set()
-    if skip_dirs is not None:
-        directories_to_skip.update(skip_dirs)
-
+    directories_to_skip = set(skip_dirs or ())
     found = []
-    
+
     for root, dirs, files in os.walk(target_dir):
-        # Filter out directories that we're skipping
         dirs[:] = [d for d in dirs if d not in directories_to_skip]
 
         for name in files:
@@ -64,8 +56,7 @@ def list_auditable_files(target_dir: Path, extensions: set | dict | None = None,
                 continue
 
             try:
-                size = full.stat().st_size
-                if size > MAX_FILE_SIZE_BYTES:
+                if full.stat().st_size > MAX_FILE_SIZE_BYTES:
                     continue
             except OSError:
                 continue
@@ -75,8 +66,6 @@ def list_auditable_files(target_dir: Path, extensions: set | dict | None = None,
     return found
 
 def append_finding(ledger_path: Path, finding: dict) -> None:
-    """
-    Appends a finding to the ledger file.
-    """
+    """Appends a finding to the ledger file as one JSON line."""
     with open(ledger_path, "a", encoding="utf-8") as f:
         f.write(json.dumps(finding) + "\n")

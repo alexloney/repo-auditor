@@ -1,6 +1,5 @@
 import pytest
 from unittest.mock import MagicMock
-from pathlib import Path
 
 from auditor.evaluator.critic import verify_findings
 from auditor.agent.agent import MAX_CONSECUTIVE_ERRORS

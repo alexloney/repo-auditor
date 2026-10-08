@@ -43,11 +43,10 @@ def _build_prompt(file_path: str, full_path: Path, content: str, finding: dict) 
 
     # Provide initial context so it doesn't always have to read the file first
     if isinstance(target_line, int) and 0 < target_line <= len(lines):
-        start = max(0, target_line - 100)
-        end = min(len(lines), target_line + 100)
-        numbered_lines = [f"{start + i + 1:4d} | {line}" for i, line in enumerate(lines[start:end])]
+        start, end = max(0, target_line - 100), target_line + 100
     else:
-        numbered_lines = [f"{i + 1:4d} | {line}" for i, line in enumerate(lines[:200])]
+        start, end = 0, 200
+    numbered_lines = [f"{start + i + 1:4d} | {line}" for i, line in enumerate(lines[start:end])]
 
     return (
         f"File: {file_path}\n\n"

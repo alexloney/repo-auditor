@@ -6,6 +6,8 @@ from importlib import metadata
 from pathlib import Path
 from urllib.parse import quote
 
+from ..utils.filesystem import normalize_relpath
+
 SARIF_SCHEMA = "https://json.schemastore.org/sarif-2.1.0.json"
 TOOL_NAME = "repo-auditor"
 
@@ -52,7 +54,7 @@ def _markdown(finding: dict) -> str:
     return "\n".join(parts)
 
 def _location(finding: dict) -> dict | None:
-    file_path = str(finding.get("file") or "").replace("\\", "/").removeprefix("./")
+    file_path = normalize_relpath(finding.get("file"))
     if not file_path:
         return None
     physical = {"artifactLocation": {"uri": quote(file_path), "uriBaseId": "SRCROOT"}}

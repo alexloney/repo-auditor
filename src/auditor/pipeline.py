@@ -32,11 +32,11 @@ def get_available_scanners() -> dict[str, type[BaseScanner]]:
     excluded from the default 'all' selection.
     """
     registry = {}
-    
+
     # Iterate through all files in the scanners/ directory
     for _, module_name, _ in pkgutil.iter_modules(scanners.__path__):
         module = importlib.import_module(f"auditor.scanners.{module_name}")
-        
+
         # Find concrete BaseScanner subclasses *defined* in this module. Classes merely imported
         # into it (e.g. a parent scanner being subclassed) are registered by their own module,
         # so their auto_enabled flag comes from the right filename.
@@ -46,14 +46,12 @@ def get_available_scanners() -> dict[str, type[BaseScanner]]:
                     and not inspect.isabstract(obj)):
                 obj.auto_enabled = not module_name.startswith("_")
                 registry[obj.id] = obj
-                
+
     return registry
 
 def filter_scanners(requested_scans: str, available_scanners: dict[str, type[BaseScanner]]) -> tuple[list[type[BaseScanner]], list[str]]:
     """Filters scanners and returns (selected_scanners, skipped_ids)."""
-    selected_ids = []
     skipped_ids = []
-
     if requested_scans.lower() == "all":
         selected_ids = [sid for sid, cls in available_scanners.items() if cls.auto_enabled]
         skipped_ids = [sid for sid, cls in available_scanners.items() if not cls.auto_enabled]
@@ -63,15 +61,28 @@ def filter_scanners(requested_scans: str, available_scanners: dict[str, type[Bas
     selected_scanners = [available_scanners[sid] for sid in selected_ids if sid in available_scanners]
     return selected_scanners, skipped_ids
 
+def _read_ledger(ledger_path: Path, on_warning: Callable[[str], None]) -> list[dict]:
+    """Parses the JSON-lines ledger, skipping blank lines and warning about malformed ones."""
+    findings = []
+    with open(ledger_path, "r", encoding="utf-8") as f:
+        for lineno, line in enumerate(f, start=1):
+            if not line.strip():
+                continue
+            try:
+                findings.append(json.loads(line))
+            except json.JSONDecodeError:
+                on_warning(f"Skipping malformed ledger entry at line {lineno}")
+    return findings
+
 def _prefixed(callback: Callable[[str], None], label: str) -> Callable[[str], None]:
     """Wraps a callback so every message is indented and tagged with the emitting component."""
     return lambda msg: callback(f"  {label} {msg}")
 
-def execute_audit(target_dir: Path, 
-                  scanners_to_run: list[type[BaseScanner]], 
-                  model: str, 
-                  ollama_host: str, 
-                  ledger_file: str, 
+def execute_audit(target_dir: Path,
+                  scanners_to_run: list[type[BaseScanner]],
+                  model: str,
+                  ollama_host: str,
+                  ledger_file: str,
                   report_file: str,
                   extensions: list[str] | None = None,
                   skip_dirs: list[str] | None = None,
@@ -85,7 +96,7 @@ def execute_audit(target_dir: Path,
     """Runs the scanners, verifies the findings, and writes the report. Returns a process exit code."""
     # Without a timeout, one stalled request blocks the whole run forever. The timeout must
     # cover a full (non-streamed) generation, including a thinking model's reasoning.
-    client = ollama.Client(host=f"{ollama_host}", timeout=request_timeout)
+    client = ollama.Client(host=ollama_host, timeout=request_timeout)
     # NOTE: The ledger is intentionally NOT cleared between runs. Scanners only append to it,
     # so findings from earlier runs (possibly against other repos) are re-verified and
     # re-reported. This is deliberate for now, to make debugging the critic/reporter easier
@@ -118,16 +129,8 @@ def execute_audit(target_dir: Path,
         on_progress("No findings ledger found. Skipping evaluation and report generation.")
         return 0
 
-    raw_findings = []
     try:
-        with open(ledger_path, "r", encoding="utf-8") as f:
-            for lineno, line in enumerate(f, start=1):
-                if not line.strip():
-                    continue
-                try:
-                    raw_findings.append(json.loads(line))
-                except json.JSONDecodeError:
-                    on_warning(f"Skipping malformed ledger entry at line {lineno}")
+        raw_findings = _read_ledger(ledger_path, on_warning)
     except OSError as e:
         on_error(f"Failed to read ledger: {e}")
         return 1
@@ -138,11 +141,11 @@ def execute_audit(target_dir: Path,
 
     unique_findings = dedupe_findings(grounded_findings)
     on_progress(f"{len(unique_findings)} unique finding(s) before verification.")
-    
+
     if unique_findings:
-        verified_findings = verify_findings(client, 
-                                            model, 
-                                            target_dir, 
+        verified_findings = verify_findings(client,
+                                            model,
+                                            target_dir,
                                             unique_findings,
                                             extensions,
                                             skip_dirs,
