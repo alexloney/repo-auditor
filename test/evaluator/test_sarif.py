@@ -84,3 +84,13 @@ def test_write_sarif_report_writes_json(tmp_path):
 def test_sarif_empty_findings(tmp_path):
     run = run_of([], tmp_path)
     assert run["results"] == [] and run["tool"]["driver"]["rules"] == []
+
+
+def test_sarif_cwe_vuln_class_becomes_rule_and_seed_is_carried(tmp_path):
+    f = finding(scanner="variant", vuln_class="CWE-22", seed_commit="abc", seed_references=["CVE-2024-1"])
+    run = run_of([f], tmp_path)
+
+    assert run["results"][0]["ruleId"] == "variant/CWE-22"
+    props = run["results"][0]["properties"]
+    assert props["seedCommit"] == "abc"
+    assert props["seedReferences"] == ["CVE-2024-1"]

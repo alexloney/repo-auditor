@@ -190,6 +190,7 @@ def make_report_issue_tool(root: Path, record: Callable[[dict], None]):
         confidence: str = "high",
         category: str = "bug",
         suggested_solution: str = "",
+        vuln_class: str = "",
     ) -> str:
         """
         Logs a discovered bug, vulnerability, or bad practice into the ledger.
@@ -204,6 +205,7 @@ def make_report_issue_tool(root: Path, record: Callable[[dict], None]):
             confidence: How certain you are the issue is real. One of "high", "medium", or "low".
             category: Kind of issue, e.g. "bug", "security", "resource-leak", "race-condition", "performance", "correctness", or "api-misuse".
             suggested_solution: Concrete minimal fix, ideally as a code snippet.
+            vuln_class: Optional CWE ID for security findings, e.g. "CWE-862". Leave empty for non-security bugs.
         """
 
         # Normalize to a repo-relative, forward-slash path so agent findings dedupe against
@@ -227,18 +229,22 @@ def make_report_issue_tool(root: Path, record: Callable[[dict], None]):
                 "line(s) of code from the file, without line numbers, then call report_issue again."
             )
 
+        finding = {
+            "file": rel_path,
+            "line": resolve_line(coerce_line(line), spans),
+            "title": title,
+            "description": description,
+            "evidence": evidence,
+            "severity": severity,
+            "confidence": confidence,
+            "category": category,
+            "suggested_solution": suggested_solution,
+        }
+        if str(vuln_class or "").strip():
+            finding["vuln_class"] = str(vuln_class).strip()
+
         try:
-            record({
-                "file": rel_path,
-                "line": resolve_line(coerce_line(line), spans),
-                "title": title,
-                "description": description,
-                "evidence": evidence,
-                "severity": severity,
-                "confidence": confidence,
-                "category": category,
-                "suggested_solution": suggested_solution,
-            })
+            record(finding)
             return "Issue successfully logged to the ledger."
         except Exception as e:
             return f"Error logging issue: {e}"

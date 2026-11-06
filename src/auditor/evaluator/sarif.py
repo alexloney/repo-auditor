@@ -28,10 +28,10 @@ def _rule_id(finding: dict) -> str:
     """Groups findings into rules: '<scanner>/<most specific classification>'."""
     scanner = finding.get("scanner") or TOOL_NAME
     vuln_class = finding.get("vuln_class") or ""
-    # Prefer the OWASP category, then a slug-style vulnerability class (memory scanner's enum),
-    # then the general category. Free-text classes would explode the number of rules.
+    # Prefer the OWASP category, then a slug-style vulnerability class (memory scanner's enum) or a
+    # CWE ID (authz/variant), then the general category. Free-text classes would explode the number of rules.
     kind = (finding.get("owasp_category")
-            or (vuln_class if re.fullmatch(r"[a-z0-9-]+", vuln_class) else "")
+            or (vuln_class if re.fullmatch(r"[a-z0-9-]+|CWE-\d+", vuln_class) else "")
             or finding.get("category")
             or "bug")
     return f"{scanner}/{kind}"
@@ -72,6 +72,7 @@ def _properties(finding: dict) -> dict:
         "scanner": "scanner", "also_found_by": "alsoFoundBy", "owasp_category": "owaspCategory",
         "vuln_class": "vulnClass", "reviewer_notes": "reviewerNotes",
         "suggested_solution": "suggestedSolution", "steps_to_reproduce": "stepsToReproduce",
+        "seed_commit": "seedCommit", "seed_subject": "seedSubject", "seed_references": "seedReferences",
     }
     return {out: finding[key] for key, out in keys.items() if finding.get(key)}
 

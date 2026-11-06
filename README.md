@@ -10,8 +10,9 @@ of the findings that survive.
 repo-auditor C:\path\to\some-repo
 ```
 
-Everything runs locally against your Ollama server. Nothing is executed, built or sent anywhere
-else.
+Everything runs locally against your Ollama server. Nothing in the audited repository is executed
+or built, and nothing is sent anywhere else. (The `variant` scanner runs read-only `git log` /
+`git show` commands against the repository's history.)
 
 ---
 
@@ -147,6 +148,8 @@ repo-auditor --list
 | `--max-turns` | `100` | Model turns allowed for agentic scanners. Retries after failed or empty responses don't count. |
 | `--batch-max-files` | `8` | `batch` scanner: most files reviewed together in one request. |
 | `--batch-max-tokens` | `40000` | `batch` scanner: most estimated tokens of code in one request. Lowered automatically if it wouldn't fit in the model's context. |
+| `--variant-max-seeds` | `10` | `variant` scanner: most past security fixes to hunt variants of. |
+| `--variant-turns-per-seed` | `30` | `variant` scanner: model turns for each security fix. Capped by `--max-turns`. |
 | `--timeout` | `1800` | Seconds allowed for one model request before it counts as failed and is retried. Requests aren't streamed, so this must cover a whole response, including a thinking model's reasoning. |
 
 The exit code is `0` on success, `1` when the target doesn't exist, a scanner ID is unknown,
@@ -178,12 +181,14 @@ be run explicitly with `--scans owasp`, and `--list` marks it as disabled.
 | `memory` | Memory Corruption Deep Scan | Per-function | Buffer overflows, use-after-free and similar (C/C++ only) |
 | `arch` | Architectural Agentic Scan | Agentic | Cross-file and architectural defects |
 | `taint` | Injection & Traversal Taint Scan | Agentic | SQL injection, path traversal and command injection traced from source to sink |
+| `authz` | Authorization & Access Control Scan | Agentic | Missing authentication/authorization and insecure direct object references, route by route |
+| `variant` | Variant Analysis of Past Security Fixes | Agentic (per fix) | Incomplete patches, unpatched siblings and regressions of fixes found in git history |
 
 How they complement each other: `single-file` and `owasp` see one file with no outside context.
 `batch` adds the files each file imports or is imported by, while still covering every file.
-`arch` and `taint` can follow code anywhere in the repository, but the agent decides what to
-read, so they don't guarantee coverage. `memory` only runs on C-family sources and does nothing
-on other repositories.
+`arch`, `taint`, `authz` and `variant` can follow code anywhere in the repository, but the agent
+decides what to read, so they don't guarantee coverage. `memory` only runs on C-family sources
+and does nothing on other repositories. `variant` needs git history and does nothing without it.
 
 ### `single-file`
 
@@ -258,6 +263,51 @@ An agent that performs taint analysis across files for exactly three classes: **
 It only reports complete source-to-sink paths, with each hop in the description. This covers
 the case the per-file `owasp` scanner can't: untrusted input that enters in one file and reaches
 the sink in another.
+
+### `authz`
+
+An agent that audits access control, starting from the entry points. It hunts for four classes:
+**missing authentication** (CWE-306), **missing authorization** (CWE-862), **incorrect
+authorization** (CWE-863) and **insecure direct object references** (CWE-639).
+
+1. Identify the framework and `search_code` for route definitions (`@app.route`, `@GetMapping`,
+   `router.post(`, `urlpatterns`, …).
+2. Before judging any route, find the access-control mechanism: global middleware, router-level
+   dependencies, base controllers and decorators. Read what they check and which paths they cover.
+3. For each route that reads non-public data or changes state, confirm that authentication, the
+   required role, and ownership of any object loaded by a request-supplied ID are all checked.
+4. Compare sibling routes: an endpoint missing a check its siblings have is a strong signal.
+
+Intentionally public endpoints (login, signup, health checks, …) are not reported. Each finding
+carries the CWE ID in `vuln_class`. Access control is decided across files (middleware in one,
+decorators in another, the handler in a third), which per-file scanners can't see.
+
+### `variant`
+
+Variant analysis seeded from the repository's own history. Past security fixes show which bugs
+the maintainers already treat as vulnerabilities, and the same mistake is often repeated elsewhere
+or only partly fixed.
+
+1. **Find candidates.** `git log` for commits touching the target whose message matches security
+   keywords (`CVE-`, `GHSA-`, `security`, `overflow`, `traversal`, `injection`, `XSS`, `bypass`,
+   …). Commits that reference an advisory ID come first.
+2. **Triage.** One structured call per candidate decides whether the diff really fixes a
+   vulnerability and extracts the CWE, the vulnerable pattern, the fix mechanism, and search
+   terms. Dependency bumps, docs and false keyword hits are skipped.
+3. **Hunt.** For each confirmed fix, an agent gets the diff and the analysis and looks for an
+   **incomplete fix** (a bypass of the new check), **unpatched siblings** (the same pattern
+   elsewhere without the protection) and **regressions** (the fix lost in the current code).
+
+Up to `--variant-max-seeds` fixes are hunted, each with `--variant-turns-per-seed` turns. At most
+three candidates are triaged per seed, which bounds the cost on noisy histories. Findings carry
+`seed_commit`, `seed_subject` and `seed_references` (CVE/GHSA IDs), shown in the report as
+"Variant of". Diffs are limited to files with audited extensions and truncated at about 12,000
+tokens.
+
+The target must be a git working tree. A shallow clone has little history to mine, so clone
+without `--depth` (or run `git fetch --unshallow`). Git runs with external diff and textconv
+drivers and fsmonitor disabled, so an untrusted repository's git config can't make it run
+commands.
 
 ---
 
@@ -349,7 +399,8 @@ dropped.
 | `steps_to_reproduce` | Optional |
 | `suggested_solution` | Concrete minimal fix |
 | `owasp_category` | Added by `owasp` (A01–A10:2021) |
-| `vuln_class` | Added by `owasp` (free text) and `memory` (`buffer-overflow`, `use-after-free`, …) |
+| `vuln_class` | Added by `owasp` (free text), `memory` (`buffer-overflow`, `use-after-free`, …), and as a CWE ID by `authz`, `variant` and any agent that passes it to `report_issue`. Slug and CWE values become the SARIF rule ID. |
+| `seed_commit`, `seed_subject`, `seed_references` | Added by `variant`: the past security fix this finding is a variant of, and any CVE/GHSA IDs it cited |
 | `also_found_by` | Added by dedupe: other scanners that reported the same defect |
 | `reviewer_notes` | Added by the critic |
 
@@ -468,7 +519,7 @@ root:
 | `read_file(filepath)` | Whole file with line numbers. Refused above 15,000 estimated tokens. |
 | `read_file_range(filepath, start_line, end_line)` | A line-numbered slice of a file. |
 | `search_code(query, directory)` | Literal, case-sensitive text search, capped at 100 matches. |
-| `report_issue(...)` | Appends a finding to the ledger (agentic scanners). |
+| `report_issue(...)` | Appends a finding to the ledger (agentic scanners). Takes an optional `vuln_class` (CWE ID). |
 | `submit_verdict(...)` | Records the critic's keep/reject decision (critic only). |
 
 **Security.** The repository under audit is untrusted, and its contents go straight into the
@@ -501,6 +552,8 @@ src/auditor/
     memory.py          C/C++ memory-safety review, function by function
     architectural.py   Agentic cross-file scanner
     taint.py           Agentic source-to-sink injection and traversal tracing
+    authorization.py   Agentic route-by-route access-control audit
+    variant.py         Variant analysis seeded from security fixes in git history
 
   evaluator/
     grounding.py       Evidence check: drops hallucinated findings, corrects lines
@@ -542,5 +595,6 @@ suite with coverage on Python 3.10–3.13.
   changes shift results.
 - **Slow with `all`.** Scanners and files are processed one at a time, and with `all` every file
   is reviewed by `single-file`, `owasp` and `batch` (and by `memory` for C/C++), on top of the
-  two agentic scans. For faster runs, pick scanners with `--scans`, or prefix the modules you
-  don't want by default with `_`.
+  agentic scans (`variant` runs one agent per past security fix). For faster runs, pick scanners
+  with `--scans`, e.g. `--scans taint,authz,variant` when hunting for vulnerabilities, or prefix
+  the modules you don't want by default with `_`.

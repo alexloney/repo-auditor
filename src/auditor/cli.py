@@ -6,6 +6,7 @@ from pathlib import Path
 from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT, REPORT_FORMATS
 from auditor.agent.agent import DEFAULT_MAX_TURNS
 from auditor.scanners.batch import MAX_FILES_PER_BATCH, MAX_BATCH_TOKENS
+from auditor.scanners.variant import DEFAULT_MAX_SEEDS, DEFAULT_TURNS_PER_SEED
 
 DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".js", ".jsx", ".mjs", ".cjs", ".ts", ".tsx", ".vue", ".php", ".java", ".kt", ".kts", ".go", ".rs", ".rb", ".cs", ".swift", ".m", ".mm", ".scala", ".pl", ".pm", ".sh", ".bash", ".lua", ".dart"]
 
@@ -35,6 +36,8 @@ def parse_args(args=None):
     parser.add_argument("--add-skip-dirs", type=str, default="", help="Comma-separated list of directories to skip in addition to the defaults (or to --skip-dirs).")
     parser.add_argument("--batch-max-files", type=int, default=MAX_FILES_PER_BATCH, help=f"batch scanner: maximum files reviewed together in one request. Default: {MAX_FILES_PER_BATCH}")
     parser.add_argument("--batch-max-tokens", type=int, default=MAX_BATCH_TOKENS, help=f"batch scanner: maximum estimated tokens of code in one request. Default: {MAX_BATCH_TOKENS}")
+    parser.add_argument("--variant-max-seeds", type=int, default=DEFAULT_MAX_SEEDS, help=f"variant scanner: maximum past security fixes to hunt variants of. Default: {DEFAULT_MAX_SEEDS}")
+    parser.add_argument("--variant-turns-per-seed", type=int, default=DEFAULT_TURNS_PER_SEED, help=f"variant scanner: model turns per security fix (capped by --max-turns). Default: {DEFAULT_TURNS_PER_SEED}")
     parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
 
     parsed = parser.parse_args(args)
@@ -53,6 +56,8 @@ def parse_args(args=None):
 
     if parsed.batch_max_files < 1 or parsed.batch_max_tokens < 1:
         parser.error("--batch-max-files and --batch-max-tokens must be at least 1")
+    if parsed.variant_max_seeds < 1 or parsed.variant_turns_per_seed < 1:
+        parser.error("--variant-max-seeds and --variant-turns-per-seed must be at least 1")
 
     if not parsed.repo_path and not parsed.list:
         parser.print_help()
@@ -159,6 +164,8 @@ def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
         scanner_options={
             "batch_max_files": parsed_args.batch_max_files,
             "batch_max_tokens": parsed_args.batch_max_tokens,
+            "variant_max_seeds": parsed_args.variant_max_seeds,
+            "variant_turns_per_seed": parsed_args.variant_turns_per_seed,
         },
         on_progress=print,
         on_warning=print,

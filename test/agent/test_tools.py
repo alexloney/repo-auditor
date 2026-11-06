@@ -247,3 +247,15 @@ def test_tool_parameter_descriptions_reach_schema(workspace):
         props = convert_function_to_tool(tool).function.parameters.properties
         for name, prop in props.items():
             assert prop.description, f"{tool.__name__}.{name} has no description"
+
+
+def test_report_issue_records_vuln_class_only_when_given(workspace):
+    (workspace / "app.py").write_text("x = 1\n", encoding="utf-8")
+    recorded = []
+    report_issue = make_report_issue_tool(workspace, recorded.append)
+
+    report_issue(filepath="app.py", line=1, title="t", description="d", evidence="x = 1")
+    report_issue(filepath="app.py", line=1, title="t", description="d", evidence="x = 1", vuln_class=" CWE-862 ")
+
+    assert "vuln_class" not in recorded[0]
+    assert recorded[1]["vuln_class"] == "CWE-862"

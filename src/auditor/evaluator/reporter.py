@@ -29,6 +29,10 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
             if f.get("scanner"):
                 also = f" (also found by: {', '.join(f['also_found_by'])})" if f.get("also_found_by") else ""
                 scanner = f"**Scanner:** {f['scanner']}{also}\n"
+            if f.get("seed_commit"):
+                refs = f"{', '.join(f['seed_references'])} · " if f.get("seed_references") else ""
+                subject = f" ({f['seed_subject']})" if f.get("seed_subject") else ""
+                scanner += f"**Variant of:** {refs}commit `{str(f['seed_commit'])[:12]}`{subject}\n"
             evidence = ""
             if (f.get("evidence") or "").strip():
                 lang = Path(str(f.get("file") or "")).suffix.lstrip(".")

@@ -117,3 +117,15 @@ def test_write_report_shows_scanner_and_evidence(tmp_path):
 
     assert "**Scanner:** taint (also found by: owasp, batch)" in text
     assert "```py" in text and "eval(x)" in text
+
+
+def test_write_report_shows_variant_seed(tmp_path):
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, [{
+        "title": "Unpatched sibling", "severity": "high", "file": "export.py", "line": 2,
+        "description": "d", "scanner": "variant", "seed_commit": "0123456789abcdef0123",
+        "seed_subject": "Fix path traversal", "seed_references": ["CVE-2024-12345"],
+    }])
+
+    content = report_path.read_text(encoding="utf-8")
+    assert "**Variant of:** CVE-2024-12345 · commit `0123456789ab` (Fix path traversal)" in content

@@ -202,4 +202,23 @@ def test_batch_limits_must_be_positive():
 @patch("auditor.cli.execute_audit", return_value=0)
 def test_main_passes_batch_options(mock_execute, tmp_path):
     main([str(tmp_path), "--scans", "batch", "--batch-max-files", "5", "--batch-max-tokens", "12345"])
-    assert mock_execute.call_args.kwargs["scanner_options"] == {"batch_max_files": 5, "batch_max_tokens": 12345}
+    options = mock_execute.call_args.kwargs["scanner_options"]
+    assert (options["batch_max_files"], options["batch_max_tokens"]) == (5, 12345)
+
+def test_variant_options_default_and_override():
+    from auditor.scanners.variant import DEFAULT_MAX_SEEDS, DEFAULT_TURNS_PER_SEED
+    args = parse_args(["/fake/repo"])
+    assert (args.variant_max_seeds, args.variant_turns_per_seed) == (DEFAULT_MAX_SEEDS, DEFAULT_TURNS_PER_SEED)
+
+    args = parse_args(["/fake/repo", "--variant-max-seeds", "4", "--variant-turns-per-seed", "15"])
+    assert (args.variant_max_seeds, args.variant_turns_per_seed) == (4, 15)
+
+def test_variant_options_must_be_positive():
+    with pytest.raises(SystemExit):
+        parse_args(["/fake/repo", "--variant-max-seeds", "0"])
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_variant_options(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "variant", "--variant-max-seeds", "2", "--variant-turns-per-seed", "7"])
+    options = mock_execute.call_args.kwargs["scanner_options"]
+    assert (options["variant_max_seeds"], options["variant_turns_per_seed"]) == (2, 7)
