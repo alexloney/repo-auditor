@@ -259,3 +259,15 @@ def test_report_issue_records_vuln_class_only_when_given(workspace):
 
     assert "vuln_class" not in recorded[0]
     assert recorded[1]["vuln_class"] == "CWE-862"
+
+
+def test_submit_security_verdict_normalizes_to_verdict_keys():
+    from auditor.agent.tools import make_submit_security_verdict_tool
+    received = []
+    tool = make_submit_security_verdict_tool(received.append)
+
+    assert tool(True, "Reachable", "param id", "none", "high") == "Verdict received."
+    assert received == [{
+        "is_genuine_bug": True, "reasoning": "Reachable", "adjusted_severity": "high",
+        "attacker_input": "param id", "preconditions": "none",
+    }]

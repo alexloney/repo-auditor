@@ -229,3 +229,124 @@ def test_verify_findings_ctrl_c_stops_the_run(critic_setup):
         verify_findings(mock_client, "model", tmp_path, findings, **callbacks)
 
     assert mock_client.chat.call_count == 1  # no further findings were attempted
+
+
+# --- Security-aware triage ---
+
+from auditor.evaluator.critic import (
+    is_security_finding, load_threat_model, CRITIC_SYSTEM_PROMPT, SECURITY_CRITIC_SYSTEM_PROMPT,
+    SECURITY_CRITIC_MAX_TURNS, MAX_THREAT_MODEL_TOKENS,
+)
+
+def security_verdict(**args):
+    return make_mock_response(tool_name="submit_security_verdict", tool_args=args)
+
+def tool_names(mock_client):
+    return {t.__name__ for t in mock_client.chat.call_args.kwargs["tools"]}
+
+@pytest.mark.parametrize("finding, expected", [
+    ({"category": "security"}, True),
+    ({"category": "Security "}, True),
+    ({"owasp_category": "A03:2021-Injection"}, True),
+    ({"scanner": "taint", "category": "bug"}, True),
+    ({"scanner": "variant"}, True),
+    ({"scanner": "arch", "category": "bug"}, False),
+    ({}, False),
+])
+def test_is_security_finding(finding, expected):
+    assert is_security_finding(finding) is expected
+
+def test_general_findings_use_general_critic(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict", tool_args={"is_genuine_bug": True, "reasoning": "ok"})
+
+    verify_findings(mock_client, "m", tmp_path, [{"title": "x", "file": "app.py", "line": 1, "category": "bug"}], **callbacks)
+
+    assert mock_client.chat.call_args.kwargs["messages"][0]["content"] == CRITIC_SYSTEM_PROMPT
+    assert "submit_verdict" in tool_names(mock_client)
+    assert "submit_security_verdict" not in tool_names(mock_client)
+
+def test_security_finding_kept_with_exploit_details(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = security_verdict(
+        is_exploitable=True, reasoning="Reachable from request", adjusted_severity="critical",
+        attacker_input="query param 'id' in app.py:1", preconditions="none")
+
+    findings = [{"title": "SQLi", "file": "app.py", "line": 1, "category": "security", "severity": "high"}]
+    results = verify_findings(mock_client, "m", tmp_path, findings, **callbacks)
+
+    assert mock_client.chat.call_args.kwargs["messages"][0]["content"] == SECURITY_CRITIC_SYSTEM_PROMPT
+    assert "submit_security_verdict" in tool_names(mock_client)
+    assert results[0]["severity"] == "critical"
+    assert results[0]["attacker_input"] == "query param 'id' in app.py:1"
+    assert results[0]["exploit_preconditions"] == "none"
+    assert results[0]["reviewer_notes"] == "Reachable from request"
+
+def test_security_finding_rejected_when_not_exploitable(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = security_verdict(is_exploitable="false", reasoning="Operator-controlled config")
+
+    findings = [{"title": "Cmd injection", "file": "app.py", "line": 1, "scanner": "taint"}]
+
+    assert verify_findings(mock_client, "m", tmp_path, findings, **callbacks) == []
+    callbacks["on_progress"].assert_any_call(" - Rejected: Operator-controlled config")
+
+def test_security_critic_has_larger_turn_budget(critic_setup):
+    tmp_path, callbacks = critic_setup
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(plain_text="Tracing...")
+
+    results = verify_findings(mock_client, "m", tmp_path,
+                              [{"title": "x", "file": "app.py", "line": 1, "category": "security"}], **callbacks)
+
+    assert mock_client.chat.call_count == SECURITY_CRITIC_MAX_TURNS
+    assert len(results) == 1  # fails open, like the general critic
+    assert "submit_security_verdict" in mock_client.chat.call_args_list[1].kwargs["messages"][3]["content"]
+
+def test_security_prompt_includes_threat_model(critic_setup):
+    tmp_path, callbacks = critic_setup
+    (tmp_path / "SECURITY.md").write_text("Config files are trusted input.", encoding="utf-8")
+    mock_client = MagicMock()
+    mock_client.chat.return_value = security_verdict(is_exploitable=False, reasoning="Out of scope")
+
+    verify_findings(mock_client, "m", tmp_path,
+                    [{"title": "x", "file": "app.py", "line": 1, "category": "security"}], **callbacks)
+
+    user_prompt = mock_client.chat.call_args.kwargs["messages"][1]["content"]
+    assert "Config files are trusted input." in user_prompt
+    assert "--- SECURITY.md ---" in user_prompt
+
+def test_general_prompt_omits_threat_model(critic_setup):
+    tmp_path, callbacks = critic_setup
+    (tmp_path / "SECURITY.md").write_text("Config files are trusted input.", encoding="utf-8")
+    mock_client = MagicMock()
+    mock_client.chat.return_value = make_mock_response(
+        tool_name="submit_verdict", tool_args={"is_genuine_bug": True, "reasoning": "ok"})
+
+    verify_findings(mock_client, "m", tmp_path, [{"title": "x", "file": "app.py", "line": 1}], **callbacks)
+
+    assert "Config files are trusted" not in mock_client.chat.call_args.kwargs["messages"][1]["content"]
+
+def test_load_threat_model_finds_policy_files(tmp_path):
+    (tmp_path / ".github").mkdir()
+    (tmp_path / ".github" / "SECURITY.md").write_text("Report to security@example.com", encoding="utf-8")
+    (tmp_path / "docs").mkdir()
+    (tmp_path / "docs" / "threat-model.md").write_text("Admins are trusted.", encoding="utf-8")
+    (tmp_path / "README.md").write_text("not a policy", encoding="utf-8")
+
+    text = load_threat_model(tmp_path)
+
+    assert "--- .github/SECURITY.md ---" in text
+    assert "--- docs/threat-model.md ---" in text
+    assert "not a policy" not in text
+
+def test_load_threat_model_empty_and_truncated(tmp_path):
+    assert load_threat_model(tmp_path) == ""
+
+    (tmp_path / "SECURITY.md").write_text("word " * (MAX_THREAT_MODEL_TOKENS * 10), encoding="utf-8")
+    text = load_threat_model(tmp_path)
+    assert text.endswith("[... truncated ...]")

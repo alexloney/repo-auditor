@@ -284,3 +284,37 @@ def make_submit_verdict_tool(on_verdict: Callable[[dict], None]):
         return "Verdict received."
 
     return submit_verdict
+
+
+def make_submit_security_verdict_tool(on_verdict: Callable[[dict], None]):
+    """Builds the security critic's verdict tool. The verdict is normalized to the same keys as
+    submit_verdict (is_exploitable -> is_genuine_bug) plus the exploitability details."""
+
+    def submit_security_verdict(
+        is_exploitable: bool,
+        reasoning: str,
+        attacker_input: str = "",
+        preconditions: str = "",
+        adjusted_severity: str = "",
+    ) -> str:
+        """
+        Submits your final verdict on whether the reported vulnerability is real and exploitable.
+        You must call this tool to complete the evaluation of the current finding.
+
+        Args:
+            is_exploitable: true only if an attacker can trigger it across a trust boundary with real impact; false otherwise.
+            reasoning: A concise explanation of the verdict, naming the check that failed if rejected.
+            attacker_input: The concrete untrusted source that reaches the vulnerable code, with file:line (e.g. "query param 'id' in routes/orders.py:42"). Required when is_exploitable is true.
+            preconditions: What the attack requires: authentication level, non-default configuration, user interaction, or "none".
+            adjusted_severity: One of "critical", "high", "medium", or "low". Required when is_exploitable is true.
+        """
+        on_verdict({
+            "is_genuine_bug": is_exploitable,
+            "reasoning": reasoning,
+            "adjusted_severity": adjusted_severity,
+            "attacker_input": attacker_input,
+            "preconditions": preconditions,
+        })
+        return "Verdict received."
+
+    return submit_security_verdict

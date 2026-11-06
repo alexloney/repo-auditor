@@ -73,6 +73,7 @@ def _properties(finding: dict) -> dict:
         "vuln_class": "vulnClass", "reviewer_notes": "reviewerNotes",
         "suggested_solution": "suggestedSolution", "steps_to_reproduce": "stepsToReproduce",
         "seed_commit": "seedCommit", "seed_subject": "seedSubject", "seed_references": "seedReferences",
+        "attacker_input": "attackerInput", "exploit_preconditions": "exploitPreconditions",
     }
     return {out: finding[key] for key, out in keys.items() if finding.get(key)}
 

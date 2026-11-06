@@ -129,3 +129,15 @@ def test_write_report_shows_variant_seed(tmp_path):
 
     content = report_path.read_text(encoding="utf-8")
     assert "**Variant of:** CVE-2024-12345 · commit `0123456789ab` (Fix path traversal)" in content
+
+
+def test_write_report_shows_exploit_details(tmp_path):
+    report_path = tmp_path / "report.md"
+    write_report(tmp_path, report_path, [{
+        "title": "SQLi", "severity": "high", "file": "db.py", "line": 1, "description": "d",
+        "attacker_input": "query param 'id'", "exploit_preconditions": "authenticated user",
+    }])
+
+    content = report_path.read_text(encoding="utf-8")
+    assert "**Attacker input:** query param 'id'" in content
+    assert "**Preconditions:** authenticated user" in content

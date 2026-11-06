@@ -23,6 +23,11 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
         for f in findings:
             repro = f"\n**Steps to reproduce**\n{f.get('steps_to_reproduce')}\n" if f.get("steps_to_reproduce") else ""
             notes = f"\n> **Reviewer Notes:** {f.get('reviewer_notes')}\n" if f.get("reviewer_notes") else ""
+            exploit = "".join(
+                f"\n**{label}:** {f[key]}\n"
+                for key, label in (("attacker_input", "Attacker input"), ("exploit_preconditions", "Preconditions"))
+                if f.get(key)
+            )
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
             vuln = f" · **Class:** {f.get('vuln_class')}" if f.get("vuln_class") else ""
             scanner = ""
@@ -46,7 +51,7 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
                 f"**File:** `{f.get('file')}`:line {f.get('line') or 'n/a'}\n"
                 f"{scanner}\n"
                 f"**Details**\n{f.get('description')}\n"
-                f"{evidence}{repro}{notes}\n"
+                f"{evidence}{exploit}{repro}{notes}\n"
                 # The fix is written as-is, not fenced: models usually include their own code fences
                 f"**Suggested solution**\n{fix}\n\n"
             )

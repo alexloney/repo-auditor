@@ -383,6 +383,29 @@ The critic **fails open**: a finding is kept if its file can't be read, the mode
 verdict, or requests keep failing. A finding whose path points outside the repository is
 dropped.
 
+**Security findings** get a stricter triage instead. A finding counts as security if its category
+is `security`, it has an `owasp_category`, or it came from `owasp`, `taint`, `memory`, `authz` or
+`variant`. The critic tries to refute exploitability and keeps the finding only if all of these
+hold:
+
+1. **Attacker control:** an attacker controls the value, from a concrete source (file:line).
+2. **Trust boundary:** the attack gains something the attacker couldn't already do. Input set only
+   by the operator (config files, environment variables, CLI arguments) or by an admin acting within
+   their role doesn't count, unless the project says otherwise.
+3. **No effective mitigation** on any path: sanitizers, parameterized APIs, auto-escaping,
+   allowlists, caller bounds checks, global auth middleware, ORM scoping.
+4. **Reachable in shipped code:** not tests, examples or dev tooling.
+5. **Real impact** beyond the attacker's existing access.
+6. **In scope** under the project's security policy, if it has one.
+
+Severity is recalibrated by reachability and privileges (critical = unauthenticated remote code
+execution or full auth bypass). The project's published policy is passed to every security
+verdict: `SECURITY.md`, `SECURITY.rst`, `SECURITY.txt`, `THREAT_MODEL.md` or `threat-model.md`,
+in the repository root, `.github/` or `docs/`, truncated at about 4,000 tokens. The verdict comes
+through `submit_security_verdict`, which also records `attacker_input` and
+`exploit_preconditions`. These security reviews get 20 turns, since tracing reachability takes
+more reads.
+
 ### Finding schema
 
 | Field | Notes |
@@ -403,6 +426,7 @@ dropped.
 | `seed_commit`, `seed_subject`, `seed_references` | Added by `variant`: the past security fix this finding is a variant of, and any CVE/GHSA IDs it cited |
 | `also_found_by` | Added by dedupe: other scanners that reported the same defect |
 | `reviewer_notes` | Added by the critic |
+| `attacker_input`, `exploit_preconditions` | Added by the security critic: the untrusted source that reaches the code, and what the attack requires (auth level, config, user interaction) |
 
 ---
 
@@ -521,6 +545,7 @@ root:
 | `search_code(query, directory)` | Literal, case-sensitive text search, capped at 100 matches. |
 | `report_issue(...)` | Appends a finding to the ledger (agentic scanners). Takes an optional `vuln_class` (CWE ID). |
 | `submit_verdict(...)` | Records the critic's keep/reject decision (critic only). |
+| `submit_security_verdict(...)` | Records the security critic's exploitability decision, attacker input and preconditions (critic only). |
 
 **Security.** The repository under audit is untrusted, and its contents go straight into the
 model's context, so a malicious repository could try prompt injection to read other files. Every
