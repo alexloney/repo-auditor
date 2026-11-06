@@ -30,6 +30,9 @@ def write_report(target_dir: Path, report_path: Path, findings: list) -> None:
             )
             owasp = f" · **OWASP:** {f.get('owasp_category')}" if f.get("owasp_category") else ""
             vuln = f" · **Class:** {f.get('vuln_class')}" if f.get("vuln_class") else ""
+            if f.get("cvss_vector"):
+                score = f"{f['cvss_score']} " if f.get("cvss_score") is not None else ""
+                vuln += f" · **CVSS:** {score}`{f['cvss_vector']}`"
             scanner = ""
             if f.get("scanner"):
                 also = f" (also found by: {', '.join(f['also_found_by'])})" if f.get("also_found_by") else ""

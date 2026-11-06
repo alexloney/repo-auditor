@@ -115,10 +115,17 @@ class SingleFileScanner(BaseScanner):
                 self.on_warning(f" ! {relpath}: review failed -> {e}")
                 continue
 
-            findings = data.get("findings", [])
-            for finding in findings:
+            recorded = 0
+            for finding in data.get("findings", []):
                 finding.update(self.FINDING_DEFAULTS)
                 finding["file"] = relpath
-                self.record_finding(finding)
-            if findings:
-                self.on_progress(f" {relpath}: {len(findings)} finding(s)")
+                finding = self.postprocess_finding(finding)
+                if finding is not None:
+                    self.record_finding(finding)
+                    recorded += 1
+            if recorded:
+                self.on_progress(f" {relpath}: {recorded} finding(s)")
+
+    def postprocess_finding(self, finding: dict) -> dict | None:
+        """Hook for subclasses to normalize a model finding, or return None to discard it."""
+        return finding

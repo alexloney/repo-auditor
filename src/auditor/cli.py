@@ -13,7 +13,9 @@ DEFAULT_EXTENSION = [".py", ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hh", ".
 DEFAULT_SKIP_DIRS = {
     "test", "tests", "testing", "spec", "__pycache__", ".venv", "venv",
     "node_modules", "vendor", "third_party", "thirdparty", "generated",
-    "build", "dist", "site-packages", ".git"
+    "build", "dist", "site-packages", ".git",
+    # Non-shipping code: bugs here are rarely vulnerabilities in the product itself.
+    "examples", "example", "samples", "docs", "benchmarks", "bench",
 }
 
 def parse_args(args=None):

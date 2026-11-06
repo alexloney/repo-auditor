@@ -140,10 +140,10 @@ def test_empty_extensions_means_all_even_with_additions():
 
 def test_add_skip_dirs_appends_to_defaults():
     from auditor.cli import DEFAULT_SKIP_DIRS
-    args = parse_args(["/fake/repo", "--add-skip-dirs", "fixtures, docs"])
+    args = parse_args(["/fake/repo", "--add-skip-dirs", "fixtures, mocks"])
 
     assert set(DEFAULT_SKIP_DIRS) <= set(args.skip_dirs)
-    assert args.skip_dirs[-2:] == ["fixtures", "docs"]
+    assert args.skip_dirs[-2:] == ["fixtures", "mocks"]
 
 def test_add_skip_dirs_appends_to_replaced_list():
     args = parse_args(["/fake/repo", "--skip-dirs", "a,b", "--add-skip-dirs", "c,a"])

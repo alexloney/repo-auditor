@@ -74,6 +74,7 @@ def _properties(finding: dict) -> dict:
         "suggested_solution": "suggestedSolution", "steps_to_reproduce": "stepsToReproduce",
         "seed_commit": "seedCommit", "seed_subject": "seedSubject", "seed_references": "seedReferences",
         "attacker_input": "attackerInput", "exploit_preconditions": "exploitPreconditions",
+        "cvss_vector": "cvssVector", "cvss_score": "cvssScore",
     }
     return {out: finding[key] for key, out in keys.items() if finding.get(key)}
 
@@ -92,10 +93,14 @@ def build_sarif(target_dir: Path, findings: list[dict]) -> dict:
         is_security = finding.get("category") == "security"
         if is_security and "security" not in rule["properties"]["tags"]:
             rule["properties"]["tags"].append("security")
-        if is_security and severity in SECURITY_SEVERITY:
+        # A computed CVSS score beats the coarse severity mapping.
+        cvss = finding.get("cvss_score")
+        score = (float(cvss) if isinstance(cvss, (int, float)) and not isinstance(cvss, bool)
+                 else SECURITY_SEVERITY.get(severity))
+        if is_security and score is not None:
             # A rule covers many results; GitHub ranks by the rule, so keep the worst seen.
             current = float(rule["properties"].get("security-severity", "0"))
-            rule["properties"]["security-severity"] = str(max(current, SECURITY_SEVERITY[severity]))
+            rule["properties"]["security-severity"] = str(max(current, score))
 
         title = finding.get("title") or "Untitled finding"
         description = finding.get("description") or ""

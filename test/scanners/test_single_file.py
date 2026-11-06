@@ -152,7 +152,7 @@ def test_owasp_findings_are_tagged_security(mock_append, mock_call_json, mock_li
 
     (tmp_path / "app.py").write_text("q = 'SELECT ' + x", encoding="utf-8")
     mock_list_files.return_value = ["app.py"]
-    mock_call_json.return_value = {"findings": [{"title": "SQLi", "owasp_category": "A03:2021-Injection"}]}
+    mock_call_json.return_value = {"findings": [{"title": "SQLi", "owasp_category": "A05:2025-Injection"}]}
 
     OwaspScanner(client=MagicMock(), model="m", target_dir=tmp_path, ledger_path=tmp_path / "l.json").run()
 

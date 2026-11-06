@@ -143,7 +143,7 @@ repo-auditor --list
 | `--format` | `md` | Report format: `md` (Markdown) or `sarif` (SARIF 2.1.0). See [Report formats](#report-formats). |
 | `--extensions` | 33 common source extensions | Comma-separated extensions to audit, replacing the defaults, e.g. `.py,.go`. The leading dot is optional and case is ignored. An empty value audits every extension. |
 | `--add-extensions` | | Comma-separated extensions to add to the defaults (or to `--extensions`), e.g. `yml,toml`. |
-| `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, … | Comma-separated directory names to skip, replacing the defaults. Matched exactly. |
+| `--skip-dirs` | `test`, `tests`, `node_modules`, `vendor`, `build`, `.venv`, `examples`, `docs`, `benchmarks`, … | Comma-separated directory names to skip, replacing the defaults. Matched exactly. Example, sample, docs and benchmark directories are skipped because they aren't shipped code. |
 | `--add-skip-dirs` | | Comma-separated directory names to skip in addition to the defaults (or to `--skip-dirs`). |
 | `--max-turns` | `100` | Model turns allowed for agentic scanners. Retries after failed or empty responses don't count. |
 | `--batch-max-files` | `8` | `batch` scanner: most files reviewed together in one request. |
@@ -176,7 +176,7 @@ be run explicitly with `--scans owasp`, and `--list` marks it as disabled.
 | ID | Name | Style | Focus |
 | --- | --- | --- | --- |
 | `single-file` | Single File Analysis | Per-file | Localized defects in one file at a time |
-| `owasp` | OWASP Top 10 Analysis | Per-file | OWASP Top 10 (2021) vulnerabilities |
+| `owasp` | OWASP Top 10 Analysis | Per-file | Exploitable OWASP Top 10 (2025) vulnerabilities, with an attacker model and CVSS vector |
 | `batch` | Batched Context Analysis | Per-batch | Defects between related files, reviewed together |
 | `memory` | Memory Corruption Deep Scan | Per-function | Buffer overflows, use-after-free and similar (C/C++ only) |
 | `arch` | Architectural Agentic Scan | Agentic | Cross-file and architectural defects |
@@ -199,10 +199,26 @@ exist and behave correctly.
 
 ### `owasp`
 
-Same mechanics as `single-file`, with a security prompt. Findings must map to an OWASP Top 10
-(2021) category. Generic logic bugs, style and performance issues are excluded unless they
-directly cause a vulnerability. Each finding carries an `owasp_category` (A01–A10) and a
-`vuln_class` (e.g. `SQL injection`, `CWE-79`). Findings are always tagged category `security`.
+Same mechanics as `single-file`, with a security prompt aimed at reportable vulnerabilities.
+Findings must map to an OWASP Top 10 (2025) category. **A03 Software Supply Chain Failures** and
+**A09 Security Logging and Alerting Failures** are left out: one source file can't show
+dependency versions (use an SCA tool such as `osv-scanner`), and missing logging is almost never
+exploitable. Misconfiguration (A02) counts only when it is set in the code and exploitable.
+Generic bugs, style, performance and missing hardening are excluded.
+
+Each finding must state an attacker model:
+
+| Field | Meaning |
+| --- | --- |
+| `vuln_class` | CWE ID, normalized to `CWE-<n>` (e.g. `cwe 79: XSS` → `CWE-79`) |
+| `attacker_input` | The untrusted source that reaches the vulnerable code |
+| `trust_boundary_crossed` | Findings where this is `false` are dropped: input only set by the program, its operator (config, environment, CLI) or an admin within their role. The field isn't stored. |
+| `exploit_preconditions` | Authentication level, non-default config, user interaction, or `none` |
+| `cvss_vector` | CVSS 3.1 base vector. The score is computed in code (`cvss_score`) and **sets the severity**. A vector with no impact drops the finding; an invalid one is discarded with a warning, keeping the model's severity. |
+| `steps_to_reproduce` | Required: a concrete proof of concept |
+
+Findings are always tagged category `security`, so the critic gives them its
+[security triage](#critic).
 
 ### `batch`
 
@@ -328,7 +344,7 @@ Both are written relative to the **current directory**, not the audited reposito
   log, which GitHub code scanning, the VS Code SARIF Viewer and other tools can display inline
   at the reported line.
   - **Rules:** each result's rule is `<scanner>/<classification>`, e.g. `taint/security`,
-    `memory/buffer-overflow` or `owasp/A03:2021-Injection`.
+    `memory/buffer-overflow` or `owasp/A05:2025-Injection`.
   - **Levels:** critical and high findings are `error`, medium is `warning`, low is `note`.
   - **GitHub security severity:** security rules get a `security-severity` score from the worst
     finding under them, which is what GitHub uses to rank security alerts.
@@ -419,10 +435,11 @@ more reads.
 | `evidence` | The exact line(s) of code containing the defect, quoted from the file |
 | `scanner` | ID of the scanner that reported it, stamped automatically |
 | `description` | Explanation of the defect |
-| `steps_to_reproduce` | Optional |
+| `steps_to_reproduce` | Optional; required for `owasp` |
 | `suggested_solution` | Concrete minimal fix |
-| `owasp_category` | Added by `owasp` (A01–A10:2021) |
-| `vuln_class` | Added by `owasp` (free text), `memory` (`buffer-overflow`, `use-after-free`, …), and as a CWE ID by `authz`, `variant` and any agent that passes it to `report_issue`. Slug and CWE values become the SARIF rule ID. |
+| `owasp_category` | Added by `owasp` (OWASP Top 10:2025, excluding A03 and A09) |
+| `cvss_vector`, `cvss_score` | Added by `owasp`: the CVSS 3.1 base vector and its computed score. In SARIF the score is used as GitHub's `security-severity`. |
+| `vuln_class` | Added by `owasp` (CWE ID), `memory` (`buffer-overflow`, `use-after-free`, …), and as a CWE ID by `authz`, `variant` and any agent that passes it to `report_issue`. Slug and CWE values become the SARIF rule ID. |
 | `seed_commit`, `seed_subject`, `seed_references` | Added by `variant`: the past security fix this finding is a variant of, and any CVE/GHSA IDs it cited |
 | `also_found_by` | Added by dedupe: other scanners that reported the same defect |
 | `reviewer_notes` | Added by the critic |
