@@ -8,6 +8,7 @@ from pathlib import Path
 
 from auditor import scanners
 from auditor.scanners.base import BaseScanner
+from auditor.utils.openai_client import OpenAIChatClient, OPENROUTER_BASE_URL
 from auditor.agent.agent import DEFAULT_MAX_TURNS
 from auditor.evaluator.dedupe import dedupe_findings
 from auditor.evaluator.grounding import ground_findings
@@ -81,7 +82,7 @@ def _prefixed(callback: Callable[[str], None], label: str) -> Callable[[str], No
 def execute_audit(target_dir: Path,
                   scanners_to_run: list[type[BaseScanner]],
                   model: str,
-                  ollama_host: str,
+                  ollama_host: str | None,
                   ledger_file: str,
                   report_file: str,
                   extensions: list[str] | None = None,
@@ -89,6 +90,9 @@ def execute_audit(target_dir: Path,
                   max_turns: int = DEFAULT_MAX_TURNS,
                   request_timeout: float | None = DEFAULT_REQUEST_TIMEOUT,
                   report_format: str = "md",
+                  provider: str = "ollama",
+                  base_url: str | None = None,
+                  api_key: str | None = None,
                   scanner_options: dict | None = None,
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
@@ -96,7 +100,10 @@ def execute_audit(target_dir: Path,
     """Runs the scanners, verifies the findings, and writes the report. Returns a process exit code."""
     # Without a timeout, one stalled request blocks the whole run forever. The timeout must
     # cover a full (non-streamed) generation, including a thinking model's reasoning.
-    client = ollama.Client(host=ollama_host, timeout=request_timeout)
+    if provider == "openrouter":
+        client = OpenAIChatClient(base_url or OPENROUTER_BASE_URL, api_key, timeout=request_timeout)
+    else:
+        client = ollama.Client(host=ollama_host, timeout=request_timeout)
     # NOTE: The ledger is intentionally NOT cleared between runs. Scanners only append to it,
     # so findings from earlier runs (possibly against other repos) are re-verified and
     # re-reported. This is deliberate for now, to make debugging the critic/reporter easier

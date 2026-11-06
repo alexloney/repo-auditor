@@ -91,6 +91,22 @@ Ollama silently truncates prompts.
 `OUTPUT_RESERVE` is the budget for both, so raise it if you see empty completions with
 `done_reason=length`.
 
+### OpenRouter (or any OpenAI-compatible API)
+
+Use `--provider openrouter` with a model ID from [openrouter.ai/models](https://openrouter.ai/models).
+The API key is read from `OPENROUTER_API_KEY` (or `OPENAI_API_KEY`), or passed with `--api-key`.
+Point `--base-url` at another OpenAI-compatible server (vLLM, LM Studio, …) to use it instead.
+
+```powershell
+$env:OPENROUTER_API_KEY = "sk-or-..."
+repo-auditor C:\path\to\repo --provider openrouter --model qwen/qwen3-coder
+```
+
+Agentic scanners and the critic need a model that supports **tool calling**; per-file scanners
+work best with models that support structured outputs (if one is rejected, the request is retried
+without it, relying on the schema in the prompt). Set `MAX_CONTEXT` to the model's real context
+window, since it is used to size prompts and `max_tokens`. Your code is sent to the provider.
+
 ---
 
 ## Usage
@@ -116,8 +132,11 @@ repo-auditor --list
 | `repo_path` | | Repository to audit. Required unless `--list` is given. |
 | `--scans` | `all` | Comma-separated scanner IDs, or `all`. Unknown IDs are an error. |
 | `--list` | | Print the registered scanners and exit. |
-| `--model` | `qwen-coder-64k:latest` | Ollama model name. |
+| `--provider` | `ollama` | `ollama` or `openrouter` (OpenAI-compatible API). |
+| `--model` | `qwen-coder-64k:latest` (Ollama) | Model name. Required with `--provider openrouter`, e.g. `qwen/qwen3-coder`. |
 | `--ollama` | `http://localhost:11434` | Ollama server URL. |
+| `--base-url` | `https://openrouter.ai/api/v1` | OpenAI-compatible API base URL (`--provider openrouter` only). |
+| `--api-key` | `$OPENROUTER_API_KEY` | API key (`--provider openrouter` only). |
 | `--ledger` | `findings.json` | Ledger file, relative to the current directory. |
 | `--report` | `report.md` or `report.sarif` | Report file, relative to the current directory. The default follows `--format`. |
 | `--format` | `md` | Report format: `md` (Markdown) or `sarif` (SARIF 2.1.0). See [Report formats](#report-formats). |

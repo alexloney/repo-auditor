@@ -1,5 +1,6 @@
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 from auditor.pipeline import execute_audit, get_available_scanners, filter_scanners, DEFAULT_REQUEST_TIMEOUT, REPORT_FORMATS
@@ -19,8 +20,11 @@ def parse_args(args=None):
     parser.add_argument("repo_path", nargs="?", help="Target repository directory")
     parser.add_argument("--scans", type=str, default="all", help="Comma-separated list of scanners. Default: all")
     parser.add_argument("--list", action="store_true", help="List available scan plugins and exit")
-    parser.add_argument("--model", type=str, help="Specify the LLM model to use for scanning. Default: qwen-coder-64k:latest", default="qwen-coder-64k:latest")
+    parser.add_argument("--provider", choices=["ollama", "openrouter"], default="ollama", help="LLM backend: ollama (local) or openrouter (any OpenAI-compatible API). Default: ollama")
+    parser.add_argument("--model", type=str, default=None, help="Model to use for scanning. Default: qwen-coder-64k:latest for ollama; required for openrouter (e.g. qwen/qwen3-coder)")
     parser.add_argument("--ollama", type=str, help="Specify the Ollama host to use for scanning. Default: http://localhost:11434", default="http://localhost:11434")
+    parser.add_argument("--base-url", type=str, default=None, help="Base URL of the OpenAI-compatible API when --provider openrouter. Default: https://openrouter.ai/api/v1")
+    parser.add_argument("--api-key", type=str, default=None, help="API key for --provider openrouter. Default: the OPENROUTER_API_KEY (or OPENAI_API_KEY) environment variable")
     parser.add_argument("--ledger", type=str, help="Specify the ledger file to use for scanning. Default: findings.json", default="findings.json")
     parser.add_argument("--report", type=str, default=None, help="Specify the report file to write. Default: report.md, or report.sarif with --format sarif")
     parser.add_argument("--format", choices=sorted(REPORT_FORMATS), default="md", help="Report format: md (Markdown) or sarif (SARIF 2.1.0, for GitHub code scanning and SARIF viewers). Default: md")
@@ -37,6 +41,15 @@ def parse_args(args=None):
 
     if parsed.report is None:
         parsed.report = REPORT_FORMATS[parsed.format][1]
+
+    if parsed.provider == "openrouter":
+        if not parsed.model:
+            parser.error("--model is required with --provider openrouter")
+        parsed.api_key = parsed.api_key or os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+        if not parsed.api_key and not parsed.base_url:
+            parser.error("OpenRouter needs an API key: set OPENROUTER_API_KEY or pass --api-key")
+    elif parsed.model is None:
+        parsed.model = "qwen-coder-64k:latest"
 
     if parsed.batch_max_files < 1 or parsed.batch_max_tokens < 1:
         parser.error("--batch-max-files and --batch-max-tokens must be at least 1")
@@ -114,6 +127,7 @@ def main(args=None):
     print(f"Target directory: {target}")
     print(f"Extensions to include: {parsed_args.extensions or 'all'}")
     print(f"Directories to skip: {parsed_args.skip_dirs or 'default skip dirs'}")
+    print(f"Provider: {parsed_args.provider}, model: {parsed_args.model}")
     print(f"Ledger file: {parsed_args.ledger}")
     print(f"Report file: {parsed_args.report} ({parsed_args.format})")
     print(f"Max agent turns: {parsed_args.max_turns}")
@@ -132,6 +146,9 @@ def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
         scanners_to_run=selected_scanners,
         model=parsed_args.model,
         ollama_host=parsed_args.ollama,
+        provider=parsed_args.provider,
+        base_url=parsed_args.base_url,
+        api_key=parsed_args.api_key,
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
         report_format=parsed_args.format,
