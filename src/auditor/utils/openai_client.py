@@ -114,7 +114,12 @@ class OpenAIChatClient:
             thinking=msg.get("reasoning") or None,
             tool_calls=tool_calls or None,
         )
-        return SimpleNamespace(message=message, done_reason=choice.get("finish_reason") or "unknown")
+        # Reasoning tokens count against max_tokens, so they explain completions cut off by length.
+        usage = data.get("usage") or {}
+        details = usage.get("completion_tokens_details") or {}
+        return SimpleNamespace(message=message, done_reason=choice.get("finish_reason") or "unknown",
+                               completion_tokens=usage.get("completion_tokens"),
+                               reasoning_tokens=details.get("reasoning_tokens"))
 
     # -- message conversion -------------------------------------------------------------
 

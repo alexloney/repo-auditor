@@ -88,9 +88,13 @@ def call_json(client, model: str, system: str, user: str, schema: dict, retries:
             )
             raw = (resp.message.content or "").strip()
             if not raw:
+                usage = ""
+                if getattr(resp, "completion_tokens", None) is not None:
+                    usage = (f", completion {resp.completion_tokens} tokens"
+                             f" of which reasoning {getattr(resp, 'reasoning_tokens', None)}")
                 raise ValueError(
                     f"model returned an empty completion "
-                    f"(done_reason={getattr(resp, 'done_reason', 'unknown')}, prompt ~{prompt_tokens} tokens)"
+                    f"(done_reason={getattr(resp, 'done_reason', 'unknown')}, prompt ~{prompt_tokens} tokens{usage})"
                 )
             return json.loads(_strip_json_fence(raw))
         except Exception as e:
