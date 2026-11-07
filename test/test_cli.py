@@ -217,6 +217,26 @@ def test_variant_options_must_be_positive():
     with pytest.raises(SystemExit):
         parse_args(["/fake/repo", "--variant-max-seeds", "0"])
 
+def test_reasoning_defaults_to_model_default():
+    assert parse_args(["/fake/repo"]).reasoning_config is None
+
+def test_reasoning_config_from_flags():
+    assert parse_args(["/fake/repo", "--reasoning", "low"]).reasoning_config == {"effort": "low"}
+    assert parse_args(["/fake/repo", "--reasoning", "off"]).reasoning_config == {"enabled": False}
+    assert parse_args(["/fake/repo", "--reasoning-max-tokens", "8000"]).reasoning_config == {"max_tokens": 8000}
+    # A token cap is more precise than an effort level, so it wins; "off" wins over both.
+    assert parse_args(["/fake/repo", "--reasoning", "high", "--reasoning-max-tokens", "500"]).reasoning_config == {"max_tokens": 500}
+    assert parse_args(["/fake/repo", "--reasoning", "off", "--reasoning-max-tokens", "500"]).reasoning_config == {"enabled": False}
+
+def test_reasoning_max_tokens_must_be_positive():
+    with pytest.raises(SystemExit):
+        parse_args(["/fake/repo", "--reasoning-max-tokens", "0"])
+
+@patch("auditor.cli.execute_audit", return_value=0)
+def test_main_passes_reasoning(mock_execute, tmp_path):
+    main([str(tmp_path), "--scans", "arch", "--reasoning-max-tokens", "4000"])
+    assert mock_execute.call_args.kwargs["reasoning"] == {"max_tokens": 4000}
+
 @patch("auditor.cli.execute_audit", return_value=0)
 def test_main_passes_variant_options(mock_execute, tmp_path):
     main([str(tmp_path), "--scans", "variant", "--variant-max-seeds", "2", "--variant-turns-per-seed", "7"])

@@ -93,6 +93,7 @@ def execute_audit(target_dir: Path,
                   provider: str = "ollama",
                   base_url: str | None = None,
                   api_key: str | None = None,
+                  reasoning: dict | None = None,
                   scanner_options: dict | None = None,
                   on_progress: Callable[[str], None] = None,
                   on_warning: Callable[[str], None] = None,
@@ -101,7 +102,8 @@ def execute_audit(target_dir: Path,
     # Without a timeout, one stalled request blocks the whole run forever. The timeout must
     # cover a full (non-streamed) generation, including a thinking model's reasoning.
     if provider == "openrouter":
-        client = OpenAIChatClient(base_url or OPENROUTER_BASE_URL, api_key, timeout=request_timeout)
+        client = OpenAIChatClient(base_url or OPENROUTER_BASE_URL, api_key, timeout=request_timeout,
+                                  reasoning=reasoning)
     else:
         client = ollama.Client(host=ollama_host, timeout=request_timeout)
     # NOTE: The ledger is intentionally NOT cleared between runs. Scanners only append to it,

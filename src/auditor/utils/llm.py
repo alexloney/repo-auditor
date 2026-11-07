@@ -92,6 +92,10 @@ def call_json(client, model: str, system: str, user: str, schema: dict, retries:
                 if getattr(resp, "completion_tokens", None) is not None:
                     usage = (f", completion {resp.completion_tokens} tokens"
                              f" of which reasoning {getattr(resp, 'reasoning_tokens', None)}")
+                # The end of the reasoning shows whether the model was still working or stuck in a loop.
+                thinking = getattr(resp.message, "thinking", None) or ""
+                if thinking:
+                    usage += f", reasoning ends: {thinking[-300:]!r}"
                 raise ValueError(
                     f"model returned an empty completion "
                     f"(done_reason={getattr(resp, 'done_reason', 'unknown')}, prompt ~{prompt_tokens} tokens{usage})"

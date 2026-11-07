@@ -20,11 +20,15 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 class OpenAIChatClient:
     def __init__(self, base_url: str, api_key: str | None, timeout: float | None = None,
-                 extra_headers: dict | None = None):
+                 extra_headers: dict | None = None, reasoning: dict | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
         self.extra_headers = extra_headers or {}
+        # OpenRouter's `reasoning` request field, e.g. {"max_tokens": 8000} or {"enabled": False}.
+        # Reasoning tokens count against max_tokens, so an unbounded reasoner can spend the
+        # whole output budget thinking and return no answer.
+        self.reasoning = reasoning
 
     # -- public API ---------------------------------------------------------------------
 
@@ -36,6 +40,8 @@ class OpenAIChatClient:
             payload["temperature"] = options["temperature"]
         if options.get("num_predict"):
             payload["max_tokens"] = options["num_predict"]
+        if self.reasoning:
+            payload["reasoning"] = self.reasoning
         if tools:
             payload["tools"] = [
                 convert_function_to_tool(t).model_dump(exclude_none=True) if callable(t) else t

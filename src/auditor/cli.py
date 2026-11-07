@@ -40,7 +40,9 @@ def parse_args(args=None):
     parser.add_argument("--batch-max-tokens", type=int, default=MAX_BATCH_TOKENS, help=f"batch scanner: maximum estimated tokens of code in one request. Default: {MAX_BATCH_TOKENS}")
     parser.add_argument("--variant-max-seeds", type=int, default=DEFAULT_MAX_SEEDS, help=f"variant scanner: maximum past security fixes to hunt variants of. Default: {DEFAULT_MAX_SEEDS}")
     parser.add_argument("--variant-turns-per-seed", type=int, default=DEFAULT_TURNS_PER_SEED, help=f"variant scanner: model turns per security fix (capped by --max-turns). Default: {DEFAULT_TURNS_PER_SEED}")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
+    parser.add_argument("--reasoning", choices=["off", "minimal", "low", "medium", "high"], default=None, help="openrouter: reasoning effort for thinking models, or 'off' to disable thinking. Default: the model's own default")
+    parser.add_argument("--reasoning-max-tokens", type=int, default=None, help="openrouter: cap on reasoning tokens per request (takes precedence over --reasoning effort levels). Reasoning counts against OUTPUT_RESERVE, so keep this well below it")
+    parser.add_argument("--timeout",type=float, default=DEFAULT_REQUEST_TIMEOUT, help=f"Seconds allowed for a single model request before it is treated as failed. Default: {DEFAULT_REQUEST_TIMEOUT}")
 
     parsed = parser.parse_args(args)
 
@@ -61,6 +63,10 @@ def parse_args(args=None):
     if parsed.variant_max_seeds < 1 or parsed.variant_turns_per_seed < 1:
         parser.error("--variant-max-seeds and --variant-turns-per-seed must be at least 1")
 
+    if parsed.reasoning_max_tokens is not None and parsed.reasoning_max_tokens < 1:
+        parser.error("--reasoning-max-tokens must be at least 1")
+    parsed.reasoning_config = _reasoning_config(parsed.reasoning, parsed.reasoning_max_tokens)
+
     if not parsed.repo_path and not parsed.list:
         parser.print_help()
         sys.exit(1)
@@ -75,6 +81,16 @@ def parse_args(args=None):
     parsed.skip_dirs = skip_dirs or None
 
     return parsed
+
+def _reasoning_config(effort: str | None, max_tokens: int | None) -> dict | None:
+    """Builds OpenRouter's `reasoning` request field, or None to leave the model's default."""
+    if effort == "off":
+        return {"enabled": False}
+    if max_tokens is not None:
+        return {"max_tokens": max_tokens}
+    if effort:
+        return {"effort": effort}
+    return None
 
 def _split_list(value: str | None) -> list[str]:
     """Splits a comma-separated CLI value, dropping blanks (so "a,,b," -> ["a", "b"])."""
@@ -141,6 +157,11 @@ def main(args=None):
     print(f"Extensions to include: {parsed_args.extensions or 'all'}")
     print(f"Directories to skip: {parsed_args.skip_dirs or 'default skip dirs'}")
     print(f"Provider: {parsed_args.provider}, model: {parsed_args.model}")
+    if parsed_args.reasoning_config:
+        if parsed_args.provider == "openrouter":
+            print(f"Reasoning: {parsed_args.reasoning_config}")
+        else:
+            print("[!] --reasoning / --reasoning-max-tokens only apply to --provider openrouter; ignoring")
     print(f"Ledger file: {parsed_args.ledger}")
     print(f"Report file: {parsed_args.report} ({parsed_args.format})")
     print(f"Max agent turns: {parsed_args.max_turns}")
@@ -162,6 +183,7 @@ def _run_audit(target: Path, selected_scanners: list, parsed_args) -> int:
         provider=parsed_args.provider,
         base_url=parsed_args.base_url,
         api_key=parsed_args.api_key,
+        reasoning=parsed_args.reasoning_config,
         ledger_file=parsed_args.ledger,
         report_file=parsed_args.report,
         report_format=parsed_args.format,
