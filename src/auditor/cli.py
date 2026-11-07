@@ -100,6 +100,12 @@ def list_scanners():
 def main(args=None):
     parsed_args = parse_args(args)
 
+    # Model output often contains characters the console encoding can't represent (e.g. cp1252
+    # on Windows when piped through Tee-Object); printing one must not abort the whole run.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
+
     # Library modules report retries and recoverable failures through `logging`.
     logging.basicConfig(level=logging.WARNING, format="    ! %(message)s")
 
